@@ -1,18 +1,17 @@
-FROM runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04
+FROM runpod/base:0.4.0-py3.11
 
 WORKDIR /workspace
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git wget curl \
+    git wget curl gcc g++ \
     && rm -rf /var/lib/apt/lists/*
 
-RUN git clone https://github.com/Zheng-Chong/CatVTON /workspace/CatVTON
+# Install PyTorch first with exact version
+RUN pip install --no-cache-dir \
+    torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
 
-WORKDIR /workspace/CatVTON
-
-# Force uninstall system diffusers first, then install correct version
-RUN pip uninstall -y diffusers transformers accelerate && \
-    pip install --no-cache-dir \
+# Install diffusers and dependencies
+RUN pip install --no-cache-dir \
     "diffusers==0.27.2" \
     "transformers==4.38.2" \
     "accelerate==0.27.2" \
@@ -20,7 +19,13 @@ RUN pip uninstall -y diffusers transformers accelerate && \
     "requests==2.31.0" \
     "Pillow==10.0.0" \
     "scipy==1.11.4" \
-    "opencv-python-headless==4.8.1.78"
+    "opencv-python-headless==4.8.1.78" \
+    "numpy==1.24.4"
+
+# Clone CatVTON
+RUN git clone https://github.com/Zheng-Chong/CatVTON /workspace/CatVTON
+
+WORKDIR /workspace/CatVTON
 
 COPY handler.py /workspace/CatVTON/handler.py
 
