@@ -6,24 +6,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git wget curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone CatVTON
 RUN git clone https://github.com/Zheng-Chong/CatVTON /workspace/CatVTON
 
 WORKDIR /workspace/CatVTON
 
-# Install exact versions that work with CatVTON
-RUN pip install --no-cache-dir \
-    diffusers==0.25.0 \
-    transformers==4.36.0 \
-    accelerate==0.25.0 \
-    torch==2.1.0 \
-    torchvision==0.16.0 \
-    Pillow==10.0.0 \
-    requests==2.31.0 \
-    runpod==1.6.0 \
-    opencv-python-headless==4.8.0.76 \
-    scipy==1.11.0 \
-    numpy==1.24.0
+# Force uninstall system diffusers first, then install correct version
+RUN pip uninstall -y diffusers transformers accelerate && \
+    pip install --no-cache-dir \
+    "diffusers==0.27.2" \
+    "transformers==4.38.2" \
+    "accelerate==0.27.2" \
+    "runpod==1.6.0" \
+    "requests==2.31.0" \
+    "Pillow==10.0.0" \
+    "scipy==1.11.4" \
+    "opencv-python-headless==4.8.1.78"
 
 COPY handler.py /workspace/CatVTON/handler.py
 
