@@ -7,10 +7,8 @@ import time
 from PIL import Image
 from io import BytesIO
 
-# CatVTON repo is cloned here inside Docker
 sys.path.insert(0, '/workspace/CatVTON')
 
-# Global — survives warm starts, only loads once per worker
 pipe = None
 automasker = None
 mask_processor = None
@@ -18,7 +16,6 @@ mask_processor = None
 def load_model():
     global pipe, automasker, mask_processor
 
-    # These imports only work AFTER sys.path is set above
     from model.pipeline import CatVTONPipeline
     from model.cloth_masker import AutoMasker
     from diffusers.image_processor import VaeImageProcessor
@@ -45,7 +42,6 @@ def load_model():
         do_binarize=True,
         do_convert_grayscale=True,
     )
-
     print("[CatVTON] Ready.")
 
 def get_image(url):
@@ -111,8 +107,5 @@ def handler(job):
             "error": str(e),
             "trace": traceback.format_exc()
         }
-
-if __name__ == "__main__":
-    load_model()
 
 runpod.serverless.start({"handler": handler})
