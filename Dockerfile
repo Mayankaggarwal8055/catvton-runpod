@@ -3,46 +3,45 @@ FROM python:3.10-slim
 WORKDIR /workspace
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git wget curl gcc g++ libgl1 libglib2.0-0 libglib2.0-dev \
+    git wget curl gcc g++ libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install PyTorch with CUDA 11.8
 RUN pip install --no-cache-dir \
-    torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
+    torch==2.1.0 torchvision==0.16.0 \
+    --index-url https://download.pytorch.org/whl/cu118
 
-# Install huggingface_hub first with old version that has cached_download
-RUN pip install --no-cache-dir "huggingface_hub==0.19.4"
-
-# Install fvcore (needed by detectron2 inside CatVTON)
+# Install base dependencies first
 RUN pip install --no-cache-dir \
-    "fvcore==0.1.5.post20221221" \
-    "iopath==0.1.9" \
-    "omegaconf==2.3.0" \
-    "pycocotools==2.0.7"
+    "numpy==1.24.4" \
+    "huggingface_hub==0.19.4" \
+    "Pillow==10.0.0" \
+    "requests==2.31.0" \
+    "runpod==1.6.0"
 
-# Install all other dependencies
+# Install ML dependencies separately
 RUN pip install --no-cache-dir \
     "diffusers==0.25.0" \
     "transformers==4.36.2" \
-    "accelerate==0.25.0" \
-    "runpod==1.6.0" \
-    "requests==2.31.0" \
-    "Pillow==10.0.0" \
+    "accelerate==0.25.0"
+
+# Install vision dependencies separately
+RUN pip install --no-cache-dir \
     "scipy==1.11.4" \
-    "opencv-python-headless==4.8.1.78" \
-    "numpy==1.24.4" \
-    "einops==0.7.0" \
-    "timm==0.9.12" \
-    "av==11.0.0" \
-    "cloudpickle==3.0.0" \
-    "yacs==0.1.8"
+    "opencv-python-headless" \
+    "einops" \
+    "timm" \
+    "yacs" \
+    "fvcore" \
+    "iopath" \
+    "cloudpickle" \
+    "pycocotools"
 
 # Clone CatVTON
 RUN git clone https://github.com/Zheng-Chong/CatVTON /workspace/CatVTON
 
 WORKDIR /workspace/CatVTON
 
-# Install CatVTON's own requirements on top (this handles any remaining deps)
 RUN pip install --no-cache-dir -r requirements.txt || true
 
 COPY handler.py /workspace/CatVTON/handler.py
