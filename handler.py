@@ -4,6 +4,7 @@ import base64
 import requests
 import sys
 import time
+import os
 from PIL import Image
 from io import BytesIO
 
@@ -16,9 +17,14 @@ mask_processor = None
 def load_model():
     global pipe, automasker, mask_processor
 
+    from huggingface_hub import login
     from model.pipeline import CatVTONPipeline
     from model.cloth_masker import AutoMasker
     from diffusers.image_processor import VaeImageProcessor
+
+    hf_token = os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if hf_token:
+        login(token=hf_token)
 
     print("[CatVTON] Loading pipeline...")
     pipe = CatVTONPipeline(
@@ -108,4 +114,3 @@ def handler(job):
         }
 
 runpod.serverless.start({"handler": handler})
-
