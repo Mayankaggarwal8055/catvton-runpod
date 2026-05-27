@@ -8,6 +8,10 @@ import os
 from PIL import Image
 from io import BytesIO
 
+os.environ["HF_HOME"] = "/workspace/hf_cache"
+os.environ["HUGGINGFACE_HUB_CACHE"] = "/workspace/hf_cache"
+os.environ["TRANSFORMERS_CACHE"] = "/workspace/hf_cache"
+
 sys.path.insert(0, '/workspace/CatVTON')
 
 pipe = None
@@ -17,7 +21,7 @@ mask_processor = None
 def load_model():
     global pipe, automasker, mask_processor
 
-    from huggingface_hub import login
+    from huggingface_hub import login, snapshot_download
     from model.pipeline import CatVTONPipeline
     from model.cloth_masker import AutoMasker
     from diffusers.image_processor import VaeImageProcessor
@@ -26,18 +30,26 @@ def load_model():
     if hf_token:
         login(token=hf_token)
 
+    # Download model files first to local path
+    print("[CatVTON] Downloading model weights...")
+    local_model_path = snapshot_download(
+        repo_id="zhengchong/CatVTON",
+        local_dir="/workspace/hf_cache/zhengchong_CatVTON",
+    )
+    print(f"[CatVTON] Model downloaded to: {local_model_path}")
+
     print("[CatVTON] Loading pipeline...")
     pipe = CatVTONPipeline(
         attn_ckpt_version="mix",
-        attn_ckpt="zhengchong/CatVTON",
+        attn_ckpt=local_model_path,
         base_ckpt="booksforcharlie/stable-diffusion-inpainting",
         device="cuda",
     )
 
     print("[CatVTON] Loading AutoMasker...")
     automasker = AutoMasker(
-        densepose_ckpt="zhengchong/CatVTON",
-        schp_ckpt="zhengchong/CatVTON",
+        densepose_ckpt=local_model_path,
+        schp_ckpt=local_model_path,
         device="cuda",
     )
 
