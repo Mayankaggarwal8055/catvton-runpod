@@ -30,7 +30,6 @@ def load_model():
     if hf_token:
         login(token=hf_token)
 
-    # Download model files first to local path
     print("[CatVTON] Downloading model weights...")
     local_model_path = snapshot_download(
         repo_id="zhengchong/CatVTON",
@@ -46,9 +45,10 @@ def load_model():
         device="cuda",
     )
 
+    densepose_path = os.path.join(local_model_path, "DensePose")
     print("[CatVTON] Loading AutoMasker...")
     automasker = AutoMasker(
-        densepose_ckpt=local_model_path,
+        densepose_ckpt=densepose_path,
         schp_ckpt=local_model_path,
         device="cuda",
     )
