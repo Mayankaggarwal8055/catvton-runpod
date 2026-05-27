@@ -14,6 +14,9 @@ RUN pip install --no-cache-dir \
 # Clone CatVTON
 RUN git clone https://github.com/Zheng-Chong/CatVTON /workspace/CatVTON
 
+RUN sed -i 's/zheng-chong\/CatVTON/zhengchong\/CatVTON/g' /workspace/CatVTON/model/pipeline.py
+RUN sed -i 's/zheng-chong\/CatVTON/zhengchong\/CatVTON/g' /workspace/CatVTON/model/cloth_masker.py
+
 WORKDIR /workspace/CatVTON
 
 # Install CatVTON requirements FIRST
