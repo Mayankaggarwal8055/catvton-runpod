@@ -27,7 +27,8 @@ RUN pip install --no-cache-dir --force-reinstall \
     "diffusers==0.25.0" \
     "transformers==4.36.2" \
     "huggingface_hub==0.19.4" \
-    "accelerate>=1.0.0,<2.0.0"
+    "accelerate==0.28.0" \
+    "peft==0.9.0"
 
 # Install remaining deps
 RUN pip install --no-cache-dir \
