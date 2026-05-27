@@ -10,19 +10,25 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
+# Clone CatVTON
 RUN git clone https://github.com/Zheng-Chong/CatVTON.git
 
 WORKDIR /workspace/CatVTON
 
-# Install base requirements
-RUN pip install --no-cache-dir -r requirements.txt
+# Remove incompatible torch packages from requirements
+RUN sed -i '/torch/d' requirements.txt && \
+    sed -i '/torchvision/d' requirements.txt && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Force compatible versions AFTER requirements
+# Force compatible versions
 RUN pip install --no-cache-dir --force-reinstall \
     diffusers==0.25.0 \
     transformers==4.36.2 \
     huggingface_hub==0.19.4 \
-    accelerate==0.25.0 \
+    accelerate==0.25.0
+
+# Extra dependencies required by CatVTON
+RUN pip install --no-cache-dir \
     runpod==1.6.0 \
     fvcore \
     iopath \

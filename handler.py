@@ -3,7 +3,6 @@ import torch
 import base64
 import requests
 import sys
-import time
 
 from PIL import Image
 from io import BytesIO
@@ -31,7 +30,7 @@ def load_model():
         device="cuda"
     )
 
-    print("[CatVTON] Loading automasker...")
+    print("[CatVTON] Loading AutoMasker...")
 
     automasker = AutoMasker(
         densepose_ckpt="zheng-chong/CatVTON",
@@ -46,7 +45,7 @@ def load_model():
         do_convert_grayscale=True
     )
 
-    print("[CatVTON] Models loaded successfully")
+    print("[CatVTON] Model loaded successfully")
 
 
 def download_image(url):
@@ -62,7 +61,7 @@ def image_to_base64(image):
 
 
 def handler(job):
-    global pipe, automasker, mask_processor
+    global pipe, automasker
 
     try:
         if pipe is None:
@@ -93,8 +92,6 @@ def handler(job):
 
         mask = automasker(person_image, cloth_type)["mask"]
 
-        mask = mask_processor.blur(mask, blur_factor=9)
-
         print("[CatVTON] Running inference...")
 
         result = pipe(
@@ -106,7 +103,7 @@ def handler(job):
             generator=torch.Generator(device="cuda").manual_seed(42)
         )[0]
 
-        print("[CatVTON] Inference completed")
+        print("[CatVTON] Inference complete")
 
         return {
             "status": "success",
