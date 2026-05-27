@@ -5,6 +5,8 @@ import requests
 import sys
 import time
 import os
+import subprocess
+import shutil
 from PIL import Image
 from io import BytesIO
 
@@ -14,7 +16,6 @@ os.environ["TRANSFORMERS_CACHE"] = "/workspace/hf_cache"
 
 sys.path.insert(0, '/workspace/CatVTON')
 
-# Use a dict to store models so global scope works correctly
 models = {
     "pipe": None,
     "automasker": None,
@@ -32,13 +33,41 @@ def load_model():
     if hf_token:
         login(token=hf_token)
 
+    local_dir = "/workspace/hf_cache/zhengchong_CatVTON"
+
+    # Clear any stale LFS pointer files from a previous incomplete download
+    if os.path.exists(local_dir):
+        # Check if the SCHP pth file is actually valid
+        schp_test = os.path.join(local_dir, "SCHP", "exp-schp-201908301523-atr.pth")
+        if os.path.exists(schp_test):
+            # Check if it's a real file (>10MB) or an LFS pointer file (<1KB)
+            if os.path.getsize(schp_test) < 1024:
+                print("[CatVTON] Found stale LFS pointer files — clearing cache...")
+                shutil.rmtree(local_dir)
+        else:
+            print("[CatVTON] Existing download missing SCHP checkpoint — clearing cache...")
+            shutil.rmtree(local_dir)
+
     print("[CatVTON] Downloading model weights...")
     local_model_path = snapshot_download(
         repo_id="zhengchong/CatVTON",
-        local_dir="/workspace/hf_cache/zhengchong_CatVTON",
+        local_dir=local_dir,
         ignore_patterns=[],
     )
     print(f"[CatVTON] Model downloaded to: {local_model_path}")
+
+    # Debug — show what was downloaded
+    result = subprocess.run(['find', local_model_path, '-name', '*.pth'],
+                            capture_output=True, text=True)
+    print(f"[CatVTON] Found .pth files:\n{result.stdout}")
+
+    result2 = subprocess.run(['ls', local_model_path],
+                             capture_output=True, text=True)
+    print(f"[CatVTON] Root contents:\n{result2.stdout}")
+
+    result3 = subprocess.run(['ls', os.path.join(local_model_path, 'SCHP')],
+                             capture_output=True, text=True)
+    print(f"[CatVTON] SCHP contents:\n{result3.stdout}")
 
     print("[CatVTON] Loading pipeline...")
     models["pipe"] = CatVTONPipeline(
@@ -50,6 +79,10 @@ def load_model():
 
     densepose_path = os.path.join(local_model_path, "DensePose")
     schp_path = os.path.join(local_model_path, "SCHP")
+
+    print(f"[CatVTON] densepose_path: {densepose_path}")
+    print(f"[CatVTON] schp_path: {schp_path}")
+
     print("[CatVTON] Loading AutoMasker...")
     models["automasker"] = AutoMasker(
         densepose_ckpt=densepose_path,
