@@ -36,6 +36,7 @@ def load_model():
     local_model_path = snapshot_download(
         repo_id="zhengchong/CatVTON",
         local_dir="/workspace/hf_cache/zhengchong_CatVTON",
+        ignore_patterns=[],
     )
     print(f"[CatVTON] Model downloaded to: {local_model_path}")
 
@@ -48,10 +49,11 @@ def load_model():
     )
 
     densepose_path = os.path.join(local_model_path, "DensePose")
+    schp_path = os.path.join(local_model_path, "SCHP")
     print("[CatVTON] Loading AutoMasker...")
     models["automasker"] = AutoMasker(
         densepose_ckpt=densepose_path,
-        schp_ckpt=local_model_path,
+        schp_ckpt=schp_path,
         device="cuda",
     )
 
