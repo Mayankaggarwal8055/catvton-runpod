@@ -14,13 +14,15 @@ os.environ["TRANSFORMERS_CACHE"] = "/workspace/hf_cache"
 
 sys.path.insert(0, '/workspace/CatVTON')
 
-pipe = None
-automasker = None
-mask_processor = None
+# Use a dict to store models so global scope works correctly
+models = {
+    "pipe": None,
+    "automasker": None,
+    "mask_processor": None,
+    "loaded": False
+}
 
 def load_model():
-    global pipe, automasker, mask_processor
-
     from huggingface_hub import login, snapshot_download
     from model.pipeline import CatVTONPipeline
     from model.cloth_masker import AutoMasker
@@ -38,7 +40,7 @@ def load_model():
     print(f"[CatVTON] Model downloaded to: {local_model_path}")
 
     print("[CatVTON] Loading pipeline...")
-    pipe = CatVTONPipeline(
+    models["pipe"] = CatVTONPipeline(
         attn_ckpt_version="mix",
         attn_ckpt=local_model_path,
         base_ckpt="booksforcharlie/stable-diffusion-inpainting",
@@ -47,18 +49,19 @@ def load_model():
 
     densepose_path = os.path.join(local_model_path, "DensePose")
     print("[CatVTON] Loading AutoMasker...")
-    automasker = AutoMasker(
+    models["automasker"] = AutoMasker(
         densepose_ckpt=densepose_path,
         schp_ckpt=local_model_path,
         device="cuda",
     )
 
-    mask_processor = VaeImageProcessor(
+    models["mask_processor"] = VaeImageProcessor(
         vae_scale_factor=8,
         do_normalize=False,
         do_binarize=True,
         do_convert_grayscale=True,
     )
+    models["loaded"] = True
     print("[CatVTON] Ready.")
 
 def get_image(url):
@@ -72,10 +75,8 @@ def to_base64(img):
     return base64.b64encode(buf.getvalue()).decode()
 
 def handler(job):
-    global pipe, automasker, mask_processor
-
     try:
-        if pipe is None:
+        if not models["loaded"]:
             load_model()
 
         inp = job.get("input", {})
@@ -95,13 +96,13 @@ def handler(job):
         cloth_img  = cloth_img.resize((768, 1024))
 
         print("[CatVTON] Generating mask...")
-        mask = automasker(person_img, cloth_type)["mask"]
-        mask_image = mask_processor.blur(mask, blur_factor=9)
+        mask = models["automasker"](person_img, cloth_type)["mask"]
+        mask_image = models["mask_processor"].blur(mask, blur_factor=9)
 
         start = time.time()
         print(f"[CatVTON] Running inference ({steps} steps)...")
 
-        result = pipe(
+        result = models["pipe"](
             image=person_img,
             condition_image=cloth_img,
             mask_image=mask_image,
