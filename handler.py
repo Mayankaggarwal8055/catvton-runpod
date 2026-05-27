@@ -26,7 +26,6 @@ def load_model():
         attn_ckpt="zheng-chong/CatVTON",
         base_ckpt="booksforcharlie/stable-diffusion-inpainting",
         device="cuda",
-        torch_dtype=torch.float16,
     )
 
     print("[CatVTON] Loading AutoMasker...")
