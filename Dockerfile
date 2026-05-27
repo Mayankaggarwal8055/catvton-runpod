@@ -32,7 +32,8 @@ RUN pip install --no-cache-dir \
     "iopath" \
     "yacs" \
     "cloudpickle" \
-    "pycocotools"
+    "pycocotools" \
+    "omegaconf==2.3.0"
 
 COPY handler.py /workspace/CatVTON/handler.py
 
