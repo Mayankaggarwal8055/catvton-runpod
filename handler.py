@@ -9,43 +9,37 @@ from io import BytesIO
 
 sys.path.insert(0, "/workspace/CatVTON")
 
-pipe = None
-automasker = None
-mask_processor = None
+from model.pipeline import CatVTONPipeline
+from model.cloth_masker import AutoMasker
+from diffusers.image_processor import VaeImageProcessor
 
+# ✅ Load at startup — NOT inside handler()
+# RunPod waits for this to finish before routing any jobs
+print("[CatVTON] Loading pipeline...")
 
-def load_model():
-    global pipe, automasker, mask_processor
+pipe = CatVTONPipeline(
+    base_ckpt="booksforcharlie/stable-diffusion-inpainting",
+    attn_ckpt="zheng-chong/CatVTON",
+    attn_ckpt_version="mix",
+    device="cuda"
+)
 
-    from model.pipeline import CatVTONPipeline
-    from model.cloth_masker import AutoMasker
-    from diffusers.image_processor import VaeImageProcessor
+print("[CatVTON] Loading AutoMasker...")
 
-    print("[CatVTON] Loading pipeline...")
+automasker = AutoMasker(
+    densepose_ckpt="zheng-chong/CatVTON",
+    schp_ckpt="zheng-chong/CatVTON",
+    device="cuda"
+)
 
-    pipe = CatVTONPipeline(
-        base_ckpt="booksforcharlie/stable-diffusion-inpainting",
-        attn_ckpt="zheng-chong/CatVTON",
-        attn_ckpt_version="mix",
-        device="cuda"
-    )
+mask_processor = VaeImageProcessor(
+    vae_scale_factor=8,
+    do_normalize=False,
+    do_binarize=True,
+    do_convert_grayscale=True
+)
 
-    print("[CatVTON] Loading AutoMasker...")
-
-    automasker = AutoMasker(
-        densepose_ckpt="zheng-chong/CatVTON",
-        schp_ckpt="zheng-chong/CatVTON",
-        device="cuda"
-    )
-
-    mask_processor = VaeImageProcessor(
-        vae_scale_factor=8,
-        do_normalize=False,
-        do_binarize=True,
-        do_convert_grayscale=True
-    )
-
-    print("[CatVTON] Model loaded successfully")
+print("[CatVTON] Ready")
 
 
 def download_image(url):
@@ -61,12 +55,7 @@ def image_to_base64(image):
 
 
 def handler(job):
-    global pipe, automasker
-
     try:
-        if pipe is None:
-            load_model()
-
         job_input = job["input"]
 
         person_url = job_input.get("person_image")
@@ -76,12 +65,10 @@ def handler(job):
 
         if not person_url:
             return {"error": "Missing person_image"}
-
         if not garment_url:
             return {"error": "Missing garment_image"}
 
         print("[CatVTON] Downloading images...")
-
         person_image = download_image(person_url)
         garment_image = download_image(garment_url)
 
@@ -89,11 +76,9 @@ def handler(job):
         garment_image = garment_image.resize((768, 1024))
 
         print("[CatVTON] Generating mask...")
-
         mask = automasker(person_image, cloth_type)["mask"]
 
         print("[CatVTON] Running inference...")
-
         result = pipe(
             image=person_image,
             condition_image=garment_image,
@@ -112,7 +97,6 @@ def handler(job):
 
     except Exception as e:
         import traceback
-
         return {
             "status": "error",
             "error": str(e),
@@ -120,8 +104,4 @@ def handler(job):
         }
 
 
-runpod.serverless.start(
-    {
-        "handler": handler
-    }
-)
+runpod.serverless.start({"handler": handler})
