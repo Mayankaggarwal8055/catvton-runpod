@@ -29,15 +29,15 @@ def load_model():
     print("[CatVTON] Loading pipeline...")
     pipe = CatVTONPipeline(
         attn_ckpt_version="mix",
-        attn_ckpt="zheng-chong/CatVTON",
+        attn_ckpt="zhengchong/CatVTON",
         base_ckpt="booksforcharlie/stable-diffusion-inpainting",
         device="cuda",
     )
 
     print("[CatVTON] Loading AutoMasker...")
     automasker = AutoMasker(
-        densepose_ckpt="zheng-chong/CatVTON",
-        schp_ckpt="zheng-chong/CatVTON",
+        densepose_ckpt="zhengchong/CatVTON",
+        schp_ckpt="zhengchong/CatVTON",
         device="cuda",
     )
 
