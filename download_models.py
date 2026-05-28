@@ -25,7 +25,7 @@ except Exception as e:
 try:
     print("[models] Downloading CatVTON weights...")
     snapshot_download(
-        repo_id="zheng-chong/CatVTON",
+        repo_id="zhengchong/CatVTON",
         local_dir="/workspace/models/catvton",
         local_dir_use_symlinks=False,   # ✅ same
         token=token
