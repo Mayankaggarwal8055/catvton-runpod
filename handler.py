@@ -18,8 +18,8 @@ from diffusers.image_processor import VaeImageProcessor
 print("[CatVTON] Loading pipeline...")
 
 pipe = CatVTONPipeline(
-    base_ckpt="booksforcharlie/stable-diffusion-inpainting",
-    attn_ckpt="zheng-chong/CatVTON",
+    base_ckpt="/workspace/models/sd-inpainting",   # ← local, not HF hub
+    attn_ckpt="/workspace/models/catvton",          # ← local, not HF hub
     attn_ckpt_version="mix",
     device="cuda"
 )
@@ -27,8 +27,8 @@ pipe = CatVTONPipeline(
 print("[CatVTON] Loading AutoMasker...")
 
 automasker = AutoMasker(
-    densepose_ckpt="zheng-chong/CatVTON",
-    schp_ckpt="zheng-chong/CatVTON",
+    densepose_ckpt="/workspace/models/catvton",     # ← local
+    schp_ckpt="/workspace/models/catvton",          # ← local
     device="cuda"
 )
 

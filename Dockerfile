@@ -30,15 +30,18 @@ RUN pip install --no-cache-dir \
     cloudpickle \
     pycocotools
 
-# ✅ THE FIX: restore CUDA torchvision LAST
-# Some transitive dep in requirements.txt overwrites it with a CPU build
-# This pins back the exact version matching torch 2.1.0 + CUDA 11.8
 RUN pip install --no-cache-dir --force-reinstall \
     "torchvision==0.16.0+cu118" \
     --index-url https://download.pytorch.org/whl/cu118
 
-# Verify the fix worked before shipping the image
-RUN python -c "import torch, torchvision; from torchvision.ops import nms; print('torchvision CUDA OK:', torchvision.__version__)"
+ARG HF_TOKEN
+ENV HUGGINGFACE_HUB_TOKEN=$HF_TOKEN
+
+# ✅ Clean: separate file instead of inline Python string
+COPY download_models.py /tmp/download_models.py
+RUN python /tmp/download_models.py
+
+RUN python -c "import torch, torchvision; from torchvision.ops import nms; print('torchvision CUDA OK')"
 
 COPY handler.py /workspace/CatVTON/handler.py
 
