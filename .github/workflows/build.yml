@@ -32,6 +32,6 @@ jobs:
         with:
           context: .        # ✅ root — where your Dockerfile actually is
           push: true
-          tags: ${{ secrets.DOCKER_USERNAME }}/catvton-runpod:v3
+          tags: ${{ secrets.DOCKER_USERNAME }}/catvton-runpod:v4
           build-args: |
             HF_TOKEN=${{ secrets.HF_TOKEN }}
