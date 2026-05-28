@@ -19,19 +19,44 @@ def load_model():
     from model.pipeline import CatVTONPipeline
     from model.cloth_masker import AutoMasker
     from diffusers.image_processor import VaeImageProcessor
+    from huggingface_hub import snapshot_download
+    import os
+
+    token = os.environ.get("HUGGINGFACE_HUB_TOKEN")
+    local_catvton = "/workspace/models/catvton"
+    local_sd = "/workspace/models/sd-inpainting"
+
+    # Download models if not already present
+    if not os.path.exists(local_catvton):
+        print("[CatVTON] Downloading CatVTON weights...")
+        snapshot_download(
+            repo_id="zhengchong/CatVTON",
+            local_dir=local_catvton,
+            local_dir_use_symlinks=False,
+            token=token
+        )
+
+    if not os.path.exists(local_sd):
+        print("[CatVTON] Downloading SD inpainting...")
+        snapshot_download(
+            repo_id="booksforcharlie/stable-diffusion-inpainting",
+            local_dir=local_sd,
+            local_dir_use_symlinks=False,
+            token=token
+        )
 
     print("[CatVTON] Loading pipeline...")
     pipe = CatVTONPipeline(
-        base_ckpt="booksforcharlie/stable-diffusion-inpainting",
-        attn_ckpt="zhengchong/CatVTON",    # ✅ fixed — no hyphen
+        base_ckpt=local_sd,
+        attn_ckpt=local_catvton,
         attn_ckpt_version="mix",
         device="cuda"
     )
 
     print("[CatVTON] Loading AutoMasker...")
     automasker = AutoMasker(
-        densepose_ckpt="zhengchong/CatVTON",   # ✅ fixed
-        schp_ckpt="zhengchong/CatVTON",         # ✅ fixed
+        densepose_ckpt=local_catvton,
+        schp_ckpt=local_catvton,
         device="cuda"
     )
 
