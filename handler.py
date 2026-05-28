@@ -29,7 +29,8 @@ def load_model():
     from model.pipeline import CatVTONPipeline
     from model.cloth_masker import AutoMasker
     from diffusers.image_processor import VaeImageProcessor
-    from huggingface_hub import snapshot_download, hf_hub_download
+    from huggingface_hub import snapshot_download
+    import os
 
     token = os.environ.get("HUGGINGFACE_HUB_TOKEN")
     local_catvton = "/workspace/models/catvton"
@@ -38,8 +39,8 @@ def load_model():
     os.makedirs(local_catvton, exist_ok=True)
     os.makedirs(local_sd, exist_ok=True)
 
-    # Download CatVTON weights
-    if not os.path.exists(os.path.join(local_catvton, "mix/attention")):
+    # Download CatVTON weights (contains DensePose/ and SCHP/ subfolders)
+    if not os.path.exists(os.path.join(local_catvton, "SCHP")):
         print("[CatVTON] Downloading CatVTON weights...")
         snapshot_download(
             repo_id="zhengchong/CatVTON",
@@ -58,27 +59,16 @@ def load_model():
             token=token
         )
 
-    # DensePose needs yaml config + model weights — download separately if missing
-    densepose_yaml = os.path.join(local_catvton, "densepose_rcnn_R_50_FPN_s1x.yaml")
-    densepose_base_yaml = os.path.join(local_catvton, "Base-DensePose-RCNN-FPN.yaml")
-    densepose_model = os.path.join(local_catvton, "model_final_162be9.pkl")
+    # Correct subpaths — files live in subfolders inside the HF repo
+    densepose_path = os.path.join(local_catvton, "DensePose")
+    schp_path = os.path.join(local_catvton, "SCHP")
 
-    download_file(
-        "https://raw.githubusercontent.com/facebookresearch/detectron2/main/projects/DensePose/configs/densepose_rcnn_R_50_FPN_s1x.yaml",
-        densepose_yaml
-    )
-    download_file(
-        "https://raw.githubusercontent.com/facebookresearch/detectron2/main/projects/DensePose/configs/Base-DensePose-RCNN-FPN.yaml",
-        densepose_base_yaml
-    )
-    download_file(
-        "https://dl.fbaipublicfiles.com/densepose/densepose_rcnn_R_50_FPN_s1x/165712039/model_final_162be9.pkl",
-        densepose_model
-    )
-
-    # Print what we have for debugging
-    print("[CatVTON] Files in /workspace/models/catvton:")
-    for f in sorted(os.listdir(local_catvton)):
+    # Debug print to confirm structure
+    print("[CatVTON] DensePose folder contents:")
+    for f in sorted(os.listdir(densepose_path)):
+        print(f"  {f}")
+    print("[CatVTON] SCHP folder contents:")
+    for f in sorted(os.listdir(schp_path)):
         print(f"  {f}")
 
     print("[CatVTON] Loading pipeline...")
@@ -91,8 +81,8 @@ def load_model():
 
     print("[CatVTON] Loading AutoMasker...")
     automasker = AutoMasker(
-        densepose_ckpt=local_catvton,
-        schp_ckpt=local_catvton,
+        densepose_ckpt=densepose_path,   # ← points to DensePose subfolder
+        schp_ckpt=schp_path,             # ← points to SCHP subfolder
         device="cuda"
     )
 
