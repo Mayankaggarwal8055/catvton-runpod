@@ -3,6 +3,8 @@ import torch
 import base64
 import requests
 import sys
+import os
+import urllib.request
 
 from PIL import Image
 from io import BytesIO
@@ -13,21 +15,31 @@ pipe = None
 automasker = None
 mask_processor = None
 
+
+def download_file(url, dest):
+    if not os.path.exists(dest):
+        print(f"[CatVTON] Downloading {os.path.basename(dest)}...")
+        urllib.request.urlretrieve(url, dest)
+        print(f"[CatVTON] Saved: {dest}")
+
+
 def load_model():
     global pipe, automasker, mask_processor
 
     from model.pipeline import CatVTONPipeline
     from model.cloth_masker import AutoMasker
     from diffusers.image_processor import VaeImageProcessor
-    from huggingface_hub import snapshot_download
-    import os
+    from huggingface_hub import snapshot_download, hf_hub_download
 
     token = os.environ.get("HUGGINGFACE_HUB_TOKEN")
     local_catvton = "/workspace/models/catvton"
     local_sd = "/workspace/models/sd-inpainting"
 
-    # Download models if not already present
-    if not os.path.exists(local_catvton):
+    os.makedirs(local_catvton, exist_ok=True)
+    os.makedirs(local_sd, exist_ok=True)
+
+    # Download CatVTON weights
+    if not os.path.exists(os.path.join(local_catvton, "mix/attention")):
         print("[CatVTON] Downloading CatVTON weights...")
         snapshot_download(
             repo_id="zhengchong/CatVTON",
@@ -36,7 +48,8 @@ def load_model():
             token=token
         )
 
-    if not os.path.exists(local_sd):
+    # Download SD inpainting
+    if not os.path.exists(os.path.join(local_sd, "unet")):
         print("[CatVTON] Downloading SD inpainting...")
         snapshot_download(
             repo_id="booksforcharlie/stable-diffusion-inpainting",
@@ -44,6 +57,29 @@ def load_model():
             local_dir_use_symlinks=False,
             token=token
         )
+
+    # DensePose needs yaml config + model weights — download separately if missing
+    densepose_yaml = os.path.join(local_catvton, "densepose_rcnn_R_50_FPN_s1x.yaml")
+    densepose_base_yaml = os.path.join(local_catvton, "Base-DensePose-RCNN-FPN.yaml")
+    densepose_model = os.path.join(local_catvton, "model_final_162be9.pkl")
+
+    download_file(
+        "https://raw.githubusercontent.com/facebookresearch/detectron2/main/projects/DensePose/configs/densepose_rcnn_R_50_FPN_s1x.yaml",
+        densepose_yaml
+    )
+    download_file(
+        "https://raw.githubusercontent.com/facebookresearch/detectron2/main/projects/DensePose/configs/Base-DensePose-RCNN-FPN.yaml",
+        densepose_base_yaml
+    )
+    download_file(
+        "https://dl.fbaipublicfiles.com/densepose/densepose_rcnn_R_50_FPN_s1x/165712039/model_final_162be9.pkl",
+        densepose_model
+    )
+
+    # Print what we have for debugging
+    print("[CatVTON] Files in /workspace/models/catvton:")
+    for f in sorted(os.listdir(local_catvton)):
+        print(f"  {f}")
 
     print("[CatVTON] Loading pipeline...")
     pipe = CatVTONPipeline(
@@ -67,6 +103,18 @@ def load_model():
         do_convert_grayscale=True
     )
     print("[CatVTON] Ready")
+
+
+def download_image(url):
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
+    return Image.open(BytesIO(response.content)).convert("RGB")
+
+
+def image_to_base64(image):
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode()
 
 
 def handler(job):
@@ -119,18 +167,6 @@ def handler(job):
             "error": str(e),
             "trace": traceback.format_exc()
         }
-
-
-def download_image(url):
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
-    return Image.open(BytesIO(response.content)).convert("RGB")
-
-
-def image_to_base64(image):
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    return base64.b64encode(buffer.getvalue()).decode()
 
 
 runpod.serverless.start({"handler": handler})
