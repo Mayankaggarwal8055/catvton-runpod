@@ -30,9 +30,12 @@ RUN pip install --no-cache-dir \
     cloudpickle \
     pycocotools
 
-RUN pip install --no-cache-dir --force-reinstall \
+RUN pip install --no-cache-dir \
     "torchvision==0.16.0+cu118" \
-    --index-url https://download.pytorch.org/whl/cu118
+    --index-url https://download.pytorch.org/whl/cu118 \
+    --no-deps
+
+RUN pip install --no-cache-dir "numpy==1.26.4"
 
 ARG HF_TOKEN
 ENV HUGGINGFACE_HUB_TOKEN=$HF_TOKEN
