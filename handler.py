@@ -138,7 +138,7 @@ def handler(job):
         result = pipe(
             image=person_image,
             condition_image=garment_image,
-            mask_image=mask,
+            mask=mask,
             num_inference_steps=steps,
             guidance_scale=2.5,
             generator=torch.Generator(device="cuda").manual_seed(42)
