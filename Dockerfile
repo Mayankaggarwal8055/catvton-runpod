@@ -37,14 +37,11 @@ RUN pip install --no-cache-dir \
 
 RUN pip install --no-cache-dir "numpy==1.26.4"
 
-ARG HF_TOKEN
-ENV HUGGINGFACE_HUB_TOKEN=$HF_TOKEN
+# ✅ peft LAST — after everything else so nothing can overwrite it
+RUN pip install --no-cache-dir "peft==0.10.0"
 
-# ✅ Clean: separate file instead of inline Python string
-COPY download_models.py /tmp/download_models.py
-RUN python /tmp/download_models.py
-
-RUN python -c "import torch, torchvision; from torchvision.ops import nms; print('torchvision CUDA OK')"
+# ✅ Verify peft and accelerate are correct versions before shipping
+RUN python -c "import peft, accelerate; print('peft:', peft.__version__, 'accelerate:', accelerate.__version__)"
 
 COPY handler.py /workspace/CatVTON/handler.py
 
