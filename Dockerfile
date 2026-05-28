@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir \
     diffusers==0.25.0 \
     transformers==4.36.2 \
     huggingface_hub==0.19.4 \
-    accelerate==0.25.0
+    accelerate==0.30.0
 
 RUN pip install --no-cache-dir \
     runpod==1.6.0 \
