@@ -70,10 +70,10 @@ def load_model():
 
 
 def handler(job):
-    global pipe
+    global pipe, automasker, mask_processor
 
     try:
-        if pipe is None:
+        if pipe is None or automasker is None or mask_processor is None:
             load_model()
 
         job_input = job["input"]
@@ -87,13 +87,16 @@ def handler(job):
         if not garment_url:
             return {"error": "Missing garment_image"}
 
+        print("[CatVTON] Downloading images...")
         person_image = download_image(person_url)
         garment_image = download_image(garment_url)
         person_image = person_image.resize((768, 1024))
         garment_image = garment_image.resize((768, 1024))
 
+        print("[CatVTON] Generating mask...")
         mask = automasker(person_image, cloth_type)["mask"]
 
+        print("[CatVTON] Running inference...")
         result = pipe(
             image=person_image,
             condition_image=garment_image,
@@ -103,6 +106,7 @@ def handler(job):
             generator=torch.Generator(device="cuda").manual_seed(42)
         )[0]
 
+        print("[CatVTON] Inference complete")
         return {
             "status": "success",
             "image_base64": image_to_base64(result)
