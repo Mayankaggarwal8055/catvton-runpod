@@ -9,30 +9,27 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 WORKDIR /workspace
 
-# System packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git wget curl \
         libgl1 libglib2.0-0 \
         build-essential gcc g++ python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone CatVTON (your fork)
 RUN git clone --depth 1 https://github.com/Mayankaggarwal8055/CatVTON.git /workspace/CatVTON
 WORKDIR /workspace/CatVTON
 
-# Install torchvision CUDA wheel
+# torchvision
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-deps \
         "torchvision==0.16.0+cu118" \
         --index-url https://download.pytorch.org/whl/cu118
 
-# ── Install EXACT dependency versions (no CatVTON requirements.txt) ──
+# Base dependencies – install diffusers from the EXACT commit CatVTON expects
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install \
+        git+https://github.com/huggingface/diffusers.git@b95637a98dda87a679321a2dfde5f166f22a8119 \
         "accelerate==0.33.0" \
-        "diffusers==0.25.0" \
         "transformers==4.44.0" \
-        "peft==0.17.0" \
         "huggingface_hub==0.36.2" \
         "numpy==1.26.4" \
         "opencv-python==4.10.0.84" \
@@ -61,13 +58,15 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         "termcolor==3.3.0" \
         "portalocker==3.2.0"
 
-# ── Force numpy 1.26.4 one more time (mediapipe might have bumped it) ──
+# Install peft last, with --no-deps, so it never gets downgraded
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-deps "peft==0.17.0"
+
+# Force numpy 1.26.4
 RUN pip install --force-reinstall "numpy==1.26.4"
 
-# ── Verify imports ──
-RUN python -c "import gfpgan, peft, accelerate, cv2, diffusers; print('OK')"
+# Quick check
+RUN python -c "import diffusers, peft; print('OK')"
 
-# Handler (last layer, fast rebuilds)
 COPY handler.py /workspace/CatVTON/handler.py
-
 CMD ["python", "-u", "/workspace/CatVTON/handler.py"]
