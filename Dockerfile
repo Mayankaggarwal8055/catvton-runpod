@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── 2. CatVTON repo ── --depth 1 skips full history (~10× faster clone) ────
-RUN git clone --depth 1 https://github.com/Zheng-Chong/CatVTON.git /workspace/CatVTON
+RUN git clone --depth 1 https://github.com/Mayankaggarwal8055/CatVTON.git /workspace/CatVTON
 WORKDIR /workspace/CatVTON
 
 # ── 3. CatVTON requirements (torch/torchvision stripped — already in base) ──
