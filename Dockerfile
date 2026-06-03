@@ -28,7 +28,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install \
         "diffusers==0.27.2" \
-        "huggingface_hub==0.23.0" \
+        "huggingface_hub==0.25.0" \
         "accelerate==0.33.0" \
         "transformers==4.36.2" \
         "numpy==1.26.4" \
