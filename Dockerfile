@@ -38,7 +38,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         "scipy==1.13.1" \
         "scikit-image==0.24.0" \
         "tqdm==4.66.4" \
-        "safetensors==0.4.5" \
         "matplotlib==3.9.1" \
         "fvcore==0.1.5.post20221221" \
         "cloudpickle==3.0.0" \
