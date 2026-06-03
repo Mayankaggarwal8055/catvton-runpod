@@ -24,13 +24,13 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         "torchvision==0.16.0+cu118" \
         --index-url https://download.pytorch.org/whl/cu118
 
-# ── Core dependencies – install diffusers 0.27.2 + compatible hub ──
+# ── Install all dependencies in one transaction ──
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install \
         "diffusers==0.27.2" \
         "huggingface_hub==0.23.0" \
         "accelerate==0.33.0" \
-        "transformers==4.44.0" \
+        "transformers==4.36.2" \
         "numpy==1.26.4" \
         "opencv-python==4.10.0.84" \
         "opencv-python-headless==4.10.0.84" \
@@ -44,7 +44,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         "omegaconf==2.3.0" \
         "pycocotools==2.0.8" \
         "av==12.3.0" \
-        "gradio==4.41.0" \
         "gfpgan==1.3.8" \
         "realesrgan==0.3.0" \
         "basicsr==1.4.2" \
