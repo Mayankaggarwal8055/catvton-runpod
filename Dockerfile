@@ -24,13 +24,13 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         "torchvision==0.16.0+cu118" \
         --index-url https://download.pytorch.org/whl/cu118
 
-# Base dependencies – install diffusers from the EXACT commit CatVTON expects
+# ── Core dependencies – install diffusers 0.27.2 + compatible hub ──
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install \
-        git+https://github.com/huggingface/diffusers.git@b95637a98dda87a679321a2dfde5f166f22a8119 \
+        "diffusers==0.27.2" \
+        "huggingface_hub==0.23.0" \
         "accelerate==0.33.0" \
         "transformers==4.44.0" \
-        "huggingface_hub==0.36.2" \
         "numpy==1.26.4" \
         "opencv-python==4.10.0.84" \
         "opencv-python-headless==4.10.0.84" \
@@ -57,14 +57,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         "termcolor==3.3.0" \
         "portalocker==3.2.0"
 
-# Install peft last, with --no-deps, so it never gets downgraded
+# Install peft last with --no-deps to prevent downgrades
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-deps "peft==0.17.0"
 
-# Force numpy 1.26.4
+# Force numpy 1.26.4 (belt and suspenders)
 RUN pip install --force-reinstall "numpy==1.26.4"
 
-# Quick check
+# Verify
 RUN python -c "import diffusers, peft; print('OK')"
 
 COPY handler.py /workspace/CatVTON/handler.py
