@@ -1,0 +1,37 @@
+# Keep the build context tiny — Docker sends this directory to the daemon
+# before building. A large context = slow start on every build.
+
+# Next.js frontend (huge)
+makemeready/
+.next/
+node_modules/
+
+# Services (not needed in RunPod image)
+services/
+
+# Version control
+.git/
+.github/
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Environment files (never bake secrets into image)
+.env
+.env.*
+*.env
+
+# Docs / scripts (not needed at runtime)
+*.md
+scripts/
+_junk/
+
+# Local model caches (don't accidentally COPY these into the image)
+*.pth
+*.ckpt
+*.safetensors
+models/

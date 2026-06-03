@@ -1,0 +1,27 @@
+name: Build and Push RunPod Image
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '**'           # trigger on any file change in the runpod repo
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: mayankaggarwal8055/catvton-runpod:latest
