@@ -68,12 +68,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --force-reinstall "numpy==1.26.4" && \
     python -c "import gfpgan, peft, accelerate, cv2; print('[verify] imports OK')"
 
-# ── 8. Models ─ THE HEAVY LAYER (~8-10 GB) ──────────────────────────────────
-# Placed BEFORE handler.py so a handler-only rebuild never touches this.
-# Only re-runs when download_models.py itself changes.
-COPY download_models.py /workspace/download_models.py
-RUN python /workspace/download_models.py
-
 # ── 9. Handler — changes every iteration, lives in its own final layer ───────
 # On every push this is the ONLY layer Docker Hub needs to upload (~KB).
 COPY handler.py /workspace/CatVTON/handler.py
