@@ -54,7 +54,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         "iopath==0.1.10" \
         "tabulate==0.10.0" \
         "termcolor==3.3.0" \
-        "portalocker==3.2.0"
+        "portalocker==3.2.0" \
+        "runpod==1.7.13"
 
 # Install peft last with --no-deps to prevent downgrades
 RUN --mount=type=cache,target=/root/.cache/pip \
