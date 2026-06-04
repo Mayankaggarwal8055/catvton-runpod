@@ -54,7 +54,10 @@ def load_models():
         device="cuda",
         skip_safety_check=True,
     )
-    pipeline.enable_xformers_memory_efficient_attention()
+    try:
+        pipeline.unet.enable_xformers_memory_efficient_attention()
+    except Exception:
+        pass
     pipeline.vae.enable_slicing()
     pipeline.automasker = AutoMasker(
         densepose_ckpt=os.path.join(catvton_path, "DensePose"),
