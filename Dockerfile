@@ -37,7 +37,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         "scipy==1.13.1" \
         "scikit-image==0.24.0" \
         "tqdm==4.66.4" \
-        "matplotlib==3.9.1" \
         "fvcore==0.1.5.post20221221" \
         "cloudpickle==3.0.0" \
         "omegaconf==2.3.0" \
@@ -59,10 +58,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 # Install xformers for memory-efficient attention
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install "xformers==0.0.23" --index-url https://download.pytorch.org/whl/cu118
+    pip install --no-deps \
+    "xformers==0.0.23" \
+    --index-url https://download.pytorch.org/whl/cu118
 
 # Pre-download model weights at build time
-RUN <<'PY'
+RUN python - <<'PY'
 from huggingface_hub import snapshot_download
 import urllib.request
 import os
@@ -73,19 +74,32 @@ models_dir = "/workspace/models"
 catvton_path = os.path.join(models_dir, "catvton")
 if not os.path.exists(os.path.join(catvton_path, "SCHP")):
     print("Pre-downloading CatVTON weights...")
-    snapshot_download("zhengchong/CatVTON", local_dir=catvton_path, local_dir_use_symlinks=False)
+    snapshot_download(
+        "zhengchong/CatVTON",
+        local_dir=catvton_path,
+        local_dir_use_symlinks=False,
+    )
     print("CatVTON weights downloaded")
 
 # SD inpainting
 sd_path = os.path.join(models_dir, "sd-inpainting")
 if not os.path.exists(os.path.join(sd_path, "unet")):
     print("Pre-downloading SD inpainting...")
-    snapshot_download("booksforcharlie/stable-diffusion-inpainting", local_dir=sd_path, local_dir_use_symlinks=False)
+    snapshot_download(
+        "booksforcharlie/stable-diffusion-inpainting",
+        local_dir=sd_path,
+        local_dir_use_symlinks=False,
+    )
     print("SD inpainting downloaded")
 
 # GFPGAN
 os.makedirs(os.path.join(models_dir, "gfpgan"), exist_ok=True)
-gfpgan_path = os.path.join(models_dir, "gfpgan/GFPGANv1.3.pth")
+
+gfpgan_path = os.path.join(
+    models_dir,
+    "gfpgan/GFPGANv1.3.pth"
+)
+
 if not os.path.exists(gfpgan_path):
     print("Pre-downloading GFPGAN...")
     urllib.request.urlretrieve(
