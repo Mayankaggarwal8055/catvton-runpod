@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4
-FROM runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel
+FROM runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel AS build
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -10,9 +10,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
 WORKDIR /workspace
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git wget curl \
-        libgl1 libglib2.0-0 \
-        build-essential gcc g++ python3-dev \
+    git wget curl \
+    libgl1 libglib2.0-0 \
+    build-essential gcc g++ python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN git clone --depth 1 https://github.com/Mayankaggarwal8055/CatVTON.git /workspace/CatVTON
@@ -24,7 +24,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         "torchvision==0.16.0+cu118" \
         --index-url https://download.pytorch.org/whl/cu118
 
-# ── Install all dependencies in one transaction ──
+# Install all dependencies in one transaction
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install \
         "diffusers==0.27.2" \
@@ -32,7 +32,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         "accelerate==0.33.0" \
         "transformers==4.45.2" \
         "numpy==1.26.4" \
-        "opencv-python==4.10.0.84" \
         "opencv-python-headless==4.10.0.84" \
         "Pillow==10.3.0" \
         "scipy==1.13.1" \
@@ -55,13 +54,54 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         "tabulate==0.10.0" \
         "termcolor==3.3.0" \
         "portalocker==3.2.0" \
-        "runpod==1.7.13"
+        "runpod==1.7.13" \
+        "cloudinary==1.41.0"
+
+# Install xformers for memory-efficient attention
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install "xformers==0.0.23" --index-url https://download.pytorch.org/whl/cu118
+
+# Pre-download model weights at build time
+RUN <<'PY'
+from huggingface_hub import snapshot_download
+import urllib.request
+import os
+
+models_dir = "/workspace/models"
+
+# CatVTON weights
+catvton_path = os.path.join(models_dir, "catvton")
+if not os.path.exists(os.path.join(catvton_path, "SCHP")):
+    print("Pre-downloading CatVTON weights...")
+    snapshot_download("zhengchong/CatVTON", local_dir=catvton_path, local_dir_use_symlinks=False)
+    print("CatVTON weights downloaded")
+
+# SD inpainting
+sd_path = os.path.join(models_dir, "sd-inpainting")
+if not os.path.exists(os.path.join(sd_path, "unet")):
+    print("Pre-downloading SD inpainting...")
+    snapshot_download("booksforcharlie/stable-diffusion-inpainting", local_dir=sd_path, local_dir_use_symlinks=False)
+    print("SD inpainting downloaded")
+
+# GFPGAN
+os.makedirs(os.path.join(models_dir, "gfpgan"), exist_ok=True)
+gfpgan_path = os.path.join(models_dir, "gfpgan/GFPGANv1.3.pth")
+if not os.path.exists(gfpgan_path):
+    print("Pre-downloading GFPGAN...")
+    urllib.request.urlretrieve(
+        "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.3.pth",
+        gfpgan_path,
+    )
+    print("GFPGAN downloaded")
+
+print("All model weights pre-downloaded")
+PY
 
 # Install peft last with --no-deps to prevent downgrades
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-deps "peft==0.17.0"
 
-# Force numpy 1.26.4 (belt and suspenders)
+# Force numpy 1.26.4
 RUN pip install --force-reinstall "numpy==1.26.4"
 
 # Verify
