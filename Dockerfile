@@ -86,7 +86,7 @@ sd_path = os.path.join(models_dir, "sd-inpainting")
 if not os.path.exists(os.path.join(sd_path, "unet")):
     print("Pre-downloading SD inpainting...")
     snapshot_download(
-        "booksforcharlie/stable-diffusion-inpainting",
+        "runwayml/stable-diffusion-inpainting",
         local_dir=sd_path,
         local_dir_use_symlinks=False,
     )
