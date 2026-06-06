@@ -406,11 +406,24 @@ def load_models():
     pipeline = CatVTONPipeline(
         base_ckpt=sd_path,
         attn_ckpt=catvton_path,
-        attn_ckpt_version="vitonhd",
+        attn_ckpt_version="mix",
         weight_dtype=torch.float16,
         device="cuda",
         skip_safety_check=True,
     )
+
+    # ── Attention weight diagnostic ───────────────────────────────────
+    # Verify that CatVTON checkpoint weights loaded into self-attention
+    # modules correctly. Standard SD self-attention has to_k weight shape
+    # (inner_dim, hidden_size) where hidden_size matches UNet block channels.
+    # If shapes show 768 instead of 320/640/1280, checkpoint failed to load.
+    for _diag_name, _diag_mod in pipeline.unet.named_modules():
+        if hasattr(_diag_mod, 'to_k') and _diag_mod.to_k is not None:
+            logger.info(
+                "attn_diag first_attn_layer=%s to_k_weight_shape=%s",
+                _diag_name, list(_diag_mod.to_k.weight.shape),
+            )
+            break
 
     # Enable xformers / memory-efficient attention
     try:
@@ -440,6 +453,38 @@ def load_models():
         logger.info("memory_format=channels_last")
     except Exception as exc:
         logger.warning("channels_last failed: %s", exc)
+
+    # ── Defensive SkipAttnProcessor validation ────────────────────────────
+    # CatVTON requires SkipAttnProcessor on ALL cross-attention (attn2)
+    # modules to skip text cross-attention (encoder_hidden_states=None).
+    # Some diffusers versions (e.g. 0.27.2) may not apply the processor
+    # correctly, leading to:
+    #   RuntimeError: mat1 and mat2 shapes cannot be multiplied
+    #   (49152x320 and 768x320)
+    # This validation detects and re-applies the processor if needed.
+    from model.attn_processor import SkipAttnProcessor as _SkipAttnProcessor
+    from model.utils import init_adapter as _init_adapter
+
+    _cross_attn_needs_fix = False
+    for _name, _proc in pipeline.unet.attn_processors.items():
+        if _name.endswith("attn2.processor") and not isinstance(_proc, _SkipAttnProcessor):
+            _cross_attn_needs_fix = True
+            break
+
+    if _cross_attn_needs_fix:
+        logger.warning(
+            "skip_attn_reapply SkipAttnProcessor not present on some "
+            "cross-attention modules — re-applying (diffusers compat fix)"
+        )
+        _init_adapter(pipeline.unet, cross_attn_cls=_SkipAttnProcessor)
+        # NOTE: intentionally NOT re-enabling xformers here —
+        # enable_xformers_memory_efficient_attention() would replace ALL
+        # attention processors (including our SkipAttnProcessor on attn2)
+        # with xformers-compatible versions, undoing the fix.
+        # AttnProcessor2_0 (set by init_adapter on self-attention) uses
+        # PyTorch SDPA which is already memory-efficient.
+    else:
+        logger.info("skip_attn_ok SkipAttnProcessor present on all cross-attention modules")
 
     # Build AutoMasker
     pipeline.automasker = AutoMasker(

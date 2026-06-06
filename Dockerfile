@@ -27,7 +27,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Install all dependencies in one transaction
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install \
-        "diffusers==0.27.2" \
+        "diffusers==0.29.2" \
         "huggingface_hub==0.25.0" \
         "accelerate==0.33.0" \
         "transformers==4.45.2" \
