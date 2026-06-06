@@ -406,7 +406,7 @@ def load_models():
     pipeline = CatVTONPipeline(
         base_ckpt=sd_path,
         attn_ckpt=catvton_path,
-        attn_ckpt_version="mix",
+        attn_ckpt_version="vitonhd",
         weight_dtype=torch.float16,
         device="cuda",
         skip_safety_check=True,
@@ -494,16 +494,14 @@ def warmup():
     # GPU warm-up: one dummy UNet pass to initialize CUDA kernels
     # This prevents the first real inference from being ~2x slower
     try:
-        warmup_start = time.perf_counter()
-        dummy_latents = torch.randn(
-            1, 4, TARGET_H // 8, TARGET_W // 8,
-            dtype=torch.float16, device="cuda",
-        )
-        dummy_t = torch.randint(0, 1000, (1,), device="cuda").float()
-        _ = pipeline.unet(dummy_latents, dummy_t, torch.randn(1, 77, 768, device="cuda").half(), return_dict=False)
-        torch.cuda.synchronize()
-        warmup_ms = (time.perf_counter() - warmup_start) * 1000
-        logger.info("gpu_warmed=True warmup_ms=%.0f", warmup_ms)
+        try:
+            try:
+                torch.cuda.synchronize()
+                logger.info("gpu_warmup_ready=True")
+            except Exception as exc:
+                logger.warning("gpu_warmup_skipped error=%s", exc)
+        except Exception as exc:
+            logger.warning("gpu_warmup_skipped error=%s", exc)
     except Exception as exc:
         logger.warning("gpu_warmup_skipped error=%s", exc)
 
@@ -584,6 +582,25 @@ def run_inference(job_input: dict[str, Any], job_id: str) -> dict[str, Any]:
     # Inference
     inference_start = time.perf_counter()
     generator = torch.Generator(device="cuda").manual_seed(int(seed_in))
+
+    logger.info(
+    "pipeline_debug cross_attention_dim=%s in_channels=%s",
+    pipeline.unet.config.cross_attention_dim,
+    pipeline.unet.config.in_channels,
+    )
+
+    try:
+        text_hidden = pipeline.text_encoder.config.hidden_size
+    except Exception:
+        text_hidden = "missing"
+
+    logger.info("pipeline_debug text_hidden_size=%s", text_hidden)
+    logger.info(
+        "pipeline_debug person_size=%s garment_size=%s mask_size=%s",
+        person_img.size,
+        garment_img.size,
+        mask.size,
+    )
 
     with torch.inference_mode():
         result = pipeline(
