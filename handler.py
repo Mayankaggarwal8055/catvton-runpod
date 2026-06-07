@@ -412,6 +412,17 @@ def load_models():
         skip_safety_check=True,
     )
 
+    from diffusers import DPMSolverMultistepScheduler
+
+    pipeline.scheduler = DPMSolverMultistepScheduler.from_config(
+        pipeline.scheduler.config,
+        algorithm_type="dpmsolver++",
+        solver_order=2,
+        use_karras_sigmas=True,
+        thresholding=False,
+    )
+    logger.info("scheduler=DPM++2MKarras configured")
+
     # ── Attention weight diagnostic ───────────────────────────────────
     # Verify that CatVTON checkpoint weights loaded into self-attention
     # modules correctly. Standard SD self-attention has to_k weight shape
@@ -591,7 +602,7 @@ def run_inference(job_input: dict[str, Any], job_id: str) -> dict[str, Any]:
         raise ValueError("Missing required inputs: person_image_url and garment_image_url")
 
     cloth_type = CLOTH_TYPE_MAP.get(cloth_type_raw, "upper")
-    steps = int(job_input.get("steps", 24))
+    steps = int(job_input.get("steps", 30))
     guidance_scale = float(job_input.get("guidance_scale", 2.5))
     seed_in = job_input.get("seed", random.randint(0, 2**31 - 1))
 
