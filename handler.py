@@ -382,7 +382,7 @@ def composite_original_face(
     x1 = max(0, x - pad_x)
     y1 = max(0, y - pad_y)
     x2 = min(W, x + w + pad_x)
-    y2 = min(H, y + h + int(h * 0.2))
+    y2 = min(H, y + h)
 
     face_mask = np.zeros((H, W), dtype=np.float32)
     face_mask[y1:y2, x1:x2] = 1.0
@@ -718,7 +718,7 @@ def run_inference(job_input: dict[str, Any], job_id: str) -> dict[str, Any]:
     torch.cuda.synchronize()
     inference_ms = (time.perf_counter() - inference_start) * 1000
 
-    result = composite_original_face(person_img, result, expand_ratio=0.35)
+    result = composite_original_face(person_img, result, expand_ratio=0.12)
 
     # Conditional face restoration
     result = restore_face(result, cloth_type)
