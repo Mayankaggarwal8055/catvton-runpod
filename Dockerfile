@@ -18,6 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN git clone --depth 1 https://github.com/Mayankaggarwal8055/CatVTON.git /workspace/CatVTON
 WORKDIR /workspace/CatVTON
 
+COPY patches/patch_cloth_masker.py /tmp/patch_cloth_masker.py
+RUN python /tmp/patch_cloth_masker.py
+
 # torchvision
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-deps \
