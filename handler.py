@@ -468,16 +468,7 @@ def load_models():
         skip_safety_check=True,
     )
 
-    from diffusers import DPMSolverMultistepScheduler
-
-    pipeline.scheduler = DPMSolverMultistepScheduler.from_config(
-        pipeline.scheduler.config,
-        algorithm_type="dpmsolver++",
-        solver_order=2,
-        use_karras_sigmas=True,
-        thresholding=False,
-    )
-    logger.info("scheduler=DPM++2MKarras configured")
+    logger.info("using default CatVTON scheduler")
 
     # ── Attention weight diagnostic ───────────────────────────────────
     # Verify that CatVTON checkpoint weights loaded into self-attention
