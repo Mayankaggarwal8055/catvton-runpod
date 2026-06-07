@@ -57,6 +57,7 @@ import runpod
 import requests
 import numpy as np
 import torch
+import cv2
 from PIL import Image
 import cloudinary  # noqa: F401
 import cloudinary.uploader  # noqa: F401
@@ -344,6 +345,61 @@ def restore_face(image: Image.Image, cloth_type: str) -> Image.Image:
 
     logger.info("gfpgan_noop no_face_detected cloth_type=%s", cloth_type)
     return image
+
+
+def composite_original_face(
+    original: Image.Image,
+    result: Image.Image,
+    expand_ratio: float = 0.35,
+) -> Image.Image:
+    """Paste the original face region onto the diffusion result."""
+    if original.size != result.size:
+        original = original.resize(result.size, Image.Resampling.LANCZOS)
+
+    orig_cv = np.array(original.convert("RGB"))[:, :, ::-1]
+    result_cv = np.array(result.convert("RGB"))[:, :, ::-1]
+
+    face_cascade = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    )
+    gray = cv2.cvtColor(orig_cv, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(
+        gray,
+        scaleFactor=1.1,
+        minNeighbors=5,
+        minSize=(80, 80),
+    )
+
+    if len(faces) == 0:
+        logger.info("face_composite_skipped no_face_detected")
+        return result
+
+    x, y, w, h = max(faces, key=lambda face: face[2] * face[3])
+
+    pad_x = int(w * expand_ratio)
+    pad_y = int(h * expand_ratio)
+    H, W = orig_cv.shape[:2]
+    x1 = max(0, x - pad_x)
+    y1 = max(0, y - pad_y)
+    x2 = min(W, x + w + pad_x)
+    y2 = min(H, y + h + int(h * 0.2))
+
+    face_mask = np.zeros((H, W), dtype=np.float32)
+    face_mask[y1:y2, x1:x2] = 1.0
+    face_mask = cv2.GaussianBlur(face_mask, (0, 0), sigmaX=12, sigmaY=12)
+    face_mask = face_mask[:, :, np.newaxis]
+
+    composited = (
+        orig_cv.astype(np.float32) * face_mask
+        + result_cv.astype(np.float32) * (1.0 - face_mask)
+    )
+    composited = np.clip(composited, 0, 255).astype(np.uint8)
+
+    logger.info(
+        "face_composite_applied face_bbox=[%d,%d,%d,%d] expand_ratio=%.2f",
+        x1, y1, x2, y2, expand_ratio,
+    )
+    return Image.fromarray(composited[:, :, ::-1])
 
 
 # ── Model Loading ────────────────────────────────────────────────────────
@@ -670,6 +726,8 @@ def run_inference(job_input: dict[str, Any], job_id: str) -> dict[str, Any]:
 
     torch.cuda.synchronize()
     inference_ms = (time.perf_counter() - inference_start) * 1000
+
+    result = composite_original_face(person_img, result, expand_ratio=0.35)
 
     # Conditional face restoration
     result = restore_face(result, cloth_type)
