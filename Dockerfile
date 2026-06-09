@@ -128,5 +128,6 @@ RUN pip install --force-reinstall "numpy==1.26.4"
 # Verify
 RUN python -c "import diffusers, peft; print('OK')"
 
+COPY postprocessing.py /workspace/CatVTON/postprocessing.py
 COPY handler.py /workspace/CatVTON/handler.py
 CMD ["python", "-u", "/workspace/CatVTON/handler.py"]
