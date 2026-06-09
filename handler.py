@@ -63,6 +63,9 @@ import cloudinary  # noqa: F401
 import cloudinary.uploader  # noqa: F401
 from requests.adapters import HTTPAdapter
 
+# Dual-mask + production post-processing pipeline
+from postprocessing import generate_masks, run_pipeline
+
 # Fashn AI optional primary inference engine
 # When FASHN_API_KEY is set, Fashn AI is used as the primary inference
 # engine and CatVTON serves as the fallback.
@@ -350,6 +353,9 @@ def prepare_mask(mask_img: Image.Image | None, cloth_type: str, person_img: Imag
     PRIMARY:   Preprocessing-generated mask (when mask_img is provided)
     FALLBACK:  CatVTON internal AutoMasker (when mask_img is None)
     NEVER:     Black/zero mask — would suppress all garment modification
+
+    Returns the PIL mask for use in the CatVTON pipeline.
+    Dual masks (inference + composite) are generated downstream in run_inference().
     """
     if mask_img is not None:
         mask = mask_img.convert("L")
@@ -913,7 +919,7 @@ def run_inference(job_input: dict[str, Any], job_id: str) -> dict[str, Any]:
 
     cloth_type = CLOTH_TYPE_MAP.get(cloth_type_raw, "upper")
     steps = int(job_input.get("steps", 30))
-    guidance_scale = float(job_input.get("guidance_scale", 7.5))
+    guidance_scale = float(job_input.get("guidance_scale", 2.5))
     seed_in = job_input.get("seed", random.randint(0, 2**31 - 1))
     prompt = job_input.get("prompt", DEFAULT_POSITIVE_PROMPT)
     negative_prompt = job_input.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
@@ -976,18 +982,30 @@ def run_inference(job_input: dict[str, Any], job_id: str) -> dict[str, Any]:
         # Prepare mask for CatVTON
         mask = prepare_mask(mask_img, cloth_type, person_img)
 
-        if DEBUG:
-            m = save_debug(f"{job_id}_mask_final", mask)
-            if m:
-                debug_files["mask_final"] = m
+        # ── Dual mask generation ─────────────────────────────────────────────
+        # Generate inference mask (dilated + feathered) for CatVTON diffusion
+        # and composite mask (original sharp) for identity-lock compositing.
+        mask_np = np.array(mask.convert("L"), dtype=np.uint8)
+        inference_mask_np, composite_mask_np = generate_masks(mask_np)
+        inference_mask_pil = Image.fromarray(
+            (np.clip(inference_mask_np * 255, 0, 255)).astype(np.uint8), mode="L"
+        )
+        composite_mask_pil = Image.fromarray(composite_mask_np, mode="L")
+        logger.info(
+            "dual_masks generated inference_coverage=%.3f composite_coverage=%.3f",
+            inference_mask_np.mean(), composite_mask_np.mean() / 255.0,
+        )
 
-            expanded = np.array(mask.convert("L")).astype(np.uint8)
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-            expanded = cv2.dilate(expanded, kernel, iterations=1)
-            expanded_pil = Image.fromarray(expanded, mode="L")
-            em = save_debug(f"{job_id}_mask_expanded", expanded_pil)
-            if em:
-                debug_files["mask_expanded"] = em
+        if DEBUG:
+            m = save_debug(f"{job_id}_mask_original", mask)
+            if m:
+                debug_files["mask_original"] = m
+            im = save_debug(f"{job_id}_mask_inference", inference_mask_pil)
+            if im:
+                debug_files["mask_inference"] = im
+            cm = save_debug(f"{job_id}_mask_composite", composite_mask_pil)
+            if cm:
+                debug_files["mask_composite"] = cm
 
         # CatVTON Inference
         inference_start = time.perf_counter()
@@ -1008,6 +1026,8 @@ def run_inference(job_input: dict[str, Any], job_id: str) -> dict[str, Any]:
 
         import gc
         oom_retry_triggered = False
+        oom_retry_steps = None
+        pipeline_kwargs_snapshot = {}
         negative_prompt_injected = False
         negative_prompt_supported = False
 
@@ -1021,7 +1041,7 @@ def run_inference(job_input: dict[str, Any], job_id: str) -> dict[str, Any]:
         base_kwargs: dict[str, Any] = {
             "image": person_img,
             "condition_image": garment_img,
-            "mask": mask,
+            "mask": inference_mask_pil,
             "num_inference_steps": steps,
             "guidance_scale": guidance_scale,
             "generator": generator,
@@ -1060,13 +1080,32 @@ def run_inference(job_input: dict[str, Any], job_id: str) -> dict[str, Any]:
             if raw_path:
                 debug_files["raw_output"] = raw_path
 
-        # Hard composite for CatVTON (diffusion can bleed outside mask)
-        result = hard_composite(
-            original_person=person_img,
-            model_output=result_raw,
-            mask_img=mask,
-            edge_feather_px=8,
+        # ── Dual mask generation ─────────────────────────────────────────────
+        # Convert mask PIL to numpy for dual mask processing
+        mask_np = np.array(mask.convert("L"), dtype=np.uint8)
+        inference_mask_np, composite_mask_np = generate_masks(mask_np)
+        logger.info(
+            "dual_masks applied inference_coverage=%.3f composite_coverage=%.3f",
+            inference_mask_np.mean(), composite_mask_np.mean() / 255.0,
         )
+
+        # Convert inference mask back to PIL for CatVTON pipeline
+        inference_mask_pil = Image.fromarray(
+            (inference_mask_np * 255).astype(np.uint8), mode="L"
+        )
+        composite_mask_pil = Image.fromarray(composite_mask_np, mode="L")
+
+        # ── New post-processing pipeline ──────────────────────────────────────
+        # run_pipeline handles: identity lock, two-pass compositing,
+        # garment sharpening, color consistency, and final edge blend.
+        result_np = run_pipeline(
+            diffusion_output=np.array(result_raw.convert("RGB")),
+            original_person=np.array(person_img.convert("RGB")),
+            garment_image=np.array(garment_img.convert("RGB")),
+            inference_mask=inference_mask_np,
+            composite_mask=composite_mask_np,
+        )
+        result = Image.fromarray(result_np)
     else:
         # Fashn AI: no hard composite needed (different model, no mask bleed)
         result = result_raw
@@ -1076,14 +1115,23 @@ def run_inference(job_input: dict[str, Any], job_id: str) -> dict[str, Any]:
             mask = mask_img.convert("L")
             if mask.size != TARGET_SIZE:
                 mask = mask.resize(TARGET_SIZE, Image.Resampling.LANCZOS)
+            mask_np = np.array(mask, dtype=np.uint8)
+            _, composite_mask_np = generate_masks(mask_np)
+            composite_mask_pil = Image.fromarray(composite_mask_np, mode="L")
         else:
             # Create a full-frame mask as fallback (post-processing will degrade gracefully)
             mask = Image.new("L", TARGET_SIZE, 128)
+            composite_mask_pil = mask
         mask_source = "fashn_ai"
     
     debug_files = {}
     person_original_for_composite = person_img
     download_ms = download_ms or (time.perf_counter() - download_start) * 1000
+    
+    if DEBUG and inference_engine == "catvton":
+        dm = save_debug(f"{job_id}_pipeline_result", result)
+        if dm:
+            debug_files["pipeline_result"] = dm
 
     if DEBUG:
         hc_path = save_debug(f"{job_id}_hard_composite_result", result)
@@ -1153,21 +1201,7 @@ def run_inference(job_input: dict[str, Any], job_id: str) -> dict[str, Any]:
         if face_path:
             debug_files["face_composite_result"] = face_path
 
-    # ── Step 3: Seamless blending at garment boundary (edge only) ──────
-    result = seamless_garment_blend(result, person_original_for_composite, mask)
-    if DEBUG:
-        sb = save_debug(f"{job_id}_seamless_blend_result", result)
-        if sb:
-            debug_files["seamless_blend_result"] = sb
-
-    # ── Step 4: Garment region sharpening (unsharp mask, after blend) ──
-    result = sharpen_garment_region(result, mask, radius=1.0, percent=120, threshold=3)
-    if DEBUG:
-        sp = save_debug(f"{job_id}_sharpened_result", result)
-        if sp:
-            debug_files["sharpened_result"] = sp
-
-    # ── Step 5: Color consistency check (skin tone preservation) ───────
+    # ── Step 3: Skin tone preservation (garment color correction is in run_pipeline) ───
     result = correct_skin_tone(result, person_original_for_composite, person_img, mask)
 
     # Upload to Cloudinary (with retry built into _upload_to_cloudinary)
