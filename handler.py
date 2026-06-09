@@ -63,6 +63,48 @@ import cloudinary  # noqa: F401
 import cloudinary.uploader  # noqa: F401
 from requests.adapters import HTTPAdapter
 
+# Fashn AI optional primary inference engine
+# When FASHN_API_KEY is set, Fashn AI is used as the primary inference
+# engine and CatVTON serves as the fallback.
+try:
+    import fashn_client
+    _FASHN_AVAILABLE = fashn_client.is_available()
+except Exception:
+    fashn_client = None  # type: ignore
+    _FASHN_AVAILABLE = False
+
+# ── Debug Dump (DEBUG_TRYON) ─────────────────────────────────────────────
+
+DEBUG = os.environ.get("DEBUG_TRYON", "0") == "1"
+
+
+def save_debug(name: str, img: Any) -> str | None:
+    """
+    If DEBUG_TRYON=1, save intermediate artifacts to /tmp/debug and return path.
+    """
+    if not DEBUG:
+        return None
+
+    os.makedirs("/tmp/debug", exist_ok=True)
+    out_path = f"/tmp/debug/{name}.png"
+
+    try:
+        if isinstance(img, np.ndarray):
+            if img.ndim == 2:
+                cv2.imwrite(out_path, img)
+            else:
+                # assume RGB
+                bgr = img[:, :, ::-1]
+                cv2.imwrite(out_path, bgr)
+        elif hasattr(img, "save"):
+            # PIL Image
+            img.save(out_path, format="PNG")
+        return out_path
+    except Exception:
+        # never break the job due to debug dump issues
+        logger.exception("save_debug_failed name=%s", name)
+        return None
+
 # ── Logging ────────────────────────────────────────────────────────────────
 
 logger = logging.getLogger("catvton.worker")
@@ -94,6 +136,28 @@ CLOTH_TYPE_MAP: dict[str, str] = {
 TARGET_SIZE = (768, 1024)
 TARGET_W, TARGET_H = TARGET_SIZE
 CLOUDINARY_FOLDER = os.environ.get("CLOUDINARY_FOLDER", "trylix/tryon/results")
+
+# ── Default prompt templates ─────────────────────────────────────────────
+
+DEFAULT_POSITIVE_PROMPT = (
+    "A photorealistic catalog-quality virtual try-on image showing "
+    "the person wearing the garment with natural fabric texture, "
+    "realistic lighting, preserved body proportions, accurate garment fit, "
+    "and high detail in the clothing region."
+)
+
+DEFAULT_NEGATIVE_PROMPT = (
+    "deformed body, distorted face, changed face, different person, "
+    "blurry, low quality, plastic fabric, synthetic texture, "
+    "hallucinated text, wrong logo, fake brand, changed collar, wrong sleeves, "
+    "extra limbs, missing limbs, bad anatomy, watermark, cartoon, "
+    "illustration, painting, low resolution, noise, grain, "
+    "overexposed, underexposed, unnatural colors, body distortion, "
+    "wrong proportions, duplicated body parts, warped garment, distorted garment, "
+    "altered background, changed background, skin discoloration, "
+    "face distortion, neck distortion, washed out, oversaturated, "
+    "incorrect skin tone, color shift, background change, background artifacts"
+)
 
 # ── Global state (loaded once at cold start) ──────────────────────────────
 
@@ -347,10 +411,212 @@ def restore_face(image: Image.Image, cloth_type: str) -> Image.Image:
     return image
 
 
+def hard_composite(
+    original_person: Image.Image,
+    model_output: Image.Image,
+    mask_img: Image.Image,
+    edge_feather_px: int = 8,
+) -> Image.Image:
+    """
+    Trust model output ONLY inside the mask.
+    Use exact original pixels everywhere else.
+
+    This eliminates diffusion bleed into non-garment regions.
+    """
+    person_np = np.array(original_person.convert("RGB")).astype(np.float32)
+    output_np = np.array(model_output.convert("RGB")).astype(np.float32)
+    mask_np = np.array(mask_img.convert("L")).astype(np.float32) / 255.0
+
+    # Feather mask edges slightly to avoid hard seams at boundaries.
+    k = edge_feather_px * 2 + 1
+    mask_blur = cv2.GaussianBlur(mask_np, (k, k), 0)
+    mask_3ch = np.stack([mask_blur] * 3, axis=-1)
+
+    composite = output_np * mask_3ch + person_np * (1.0 - mask_3ch)
+    return Image.fromarray(np.clip(composite, 0, 255).astype(np.uint8))
+
+
+# ── Garment Region Sharpening (Layer 5 Post-Processing Step 4) ────────────
+
+
+def sharpen_garment_region(
+    image: Image.Image,
+    mask_img: Image.Image,
+    radius: float = 1.0,
+    percent: float = 120,
+    threshold: int = 3,
+) -> Image.Image:
+    """
+    Apply unsharp mask sharpening to the garment region only.
+
+    Recovers texture detail that the diffusion process slightly softens.
+    Sharpening is applied ONLY inside the mask, not to surrounding areas
+    (face, background, lower body).
+    """
+    from PIL import ImageFilter
+
+    img_np = np.array(image.convert("RGB")).astype(np.float32)
+    mask_np = np.array(mask_img.convert("L")).astype(np.float32) / 255.0
+
+    # Create sharpened version
+    sharpened = image.filter(
+        ImageFilter.UnsharpMask(radius=radius, percent=percent, threshold=threshold)
+    )
+    sharp_np = np.array(sharpened.convert("RGB")).astype(np.float32)
+
+    # Blend: sharpened in mask region, original outside
+    mask_3ch = np.stack([mask_np] * 3, axis=-1)
+    result_np = img_np * (1.0 - mask_3ch) + sharp_np * mask_3ch
+
+    logger.info("garment_sharpen_applied radius=%.1f percent=%.0f", radius, percent)
+    return Image.fromarray(np.clip(result_np, 0, 255).astype(np.uint8))
+
+
+# ── Seamless Blending at Garment Boundary (Layer 5 Step 3) ────────────────
+
+
+def seamless_garment_blend(
+    image: Image.Image,
+    original_person: Image.Image,
+    mask_img: Image.Image,
+    boundary_width: int = 15,
+) -> Image.Image:
+    """
+    Apply seamless blending ONLY at the garment boundary (not the full garment).
+
+    Creates a narrow band around the mask contour and blends only that region.
+    This smooths visible seams without undoing the garment swap in the interior.
+    """
+    img_cv = np.array(image.convert("RGB"))[:, :, ::-1].copy()  # RGB -> BGR
+    orig_cv = np.array(original_person.convert("RGB"))[:, :, ::-1].copy()
+    mask_np = np.array(mask_img.convert("L"), dtype=np.uint8)
+
+    # Find the garment contour center
+    contours, _ = cv2.findContours(mask_np, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        logger.info("seamless_blend_skipped no_garment_contour")
+        return image
+
+    main_contour = max(contours, key=cv2.contourArea)
+    M = cv2.moments(main_contour)
+    if M["m00"] == 0:
+        return image
+
+    center_x = int(M["m10"] / M["m00"])
+    center_y = int(M["m01"] / M["m00"])
+
+    try:
+        # Create a narrow boundary band mask
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        mask_eroded = cv2.erode(mask_np, kernel, iterations=2)
+        mask_dilated = cv2.dilate(mask_np, kernel, iterations=2)
+        # Boundary band = dilated minus eroded (only edge pixels)
+        boundary_mask = cv2.subtract(mask_dilated, mask_eroded)
+
+        # Only apply seamlessClone if we have enough boundary pixels
+        if np.sum(boundary_mask > 0) < 50:
+            logger.info("seamless_blend_skipped boundary_too_small")
+            return image
+
+        blended = cv2.seamlessClone(
+            img_cv, orig_cv, boundary_mask, (center_x, center_y), cv2.NORMAL_CLONE,
+        )
+
+        # Composite: use blended only in the boundary band, original garment interior
+        boundary_3ch = np.stack([boundary_mask.astype(np.float32) / 255.0] * 3, axis=-1)
+        result = blended.astype(np.float32) * boundary_3ch + img_cv.astype(np.float32) * (1.0 - boundary_3ch)
+        result = np.clip(result, 0, 255).astype(np.uint8)
+
+        logger.info("seamless_blend_applied boundary_width=%d center=(%d,%d)", boundary_width, center_x, center_y)
+        return Image.fromarray(result[:, :, ::-1])
+    except Exception as exc:
+        logger.warning("seamless_blend_failed error=%s", exc)
+        return image
+
+
+# ── Color Consistency Check (Layer 5 Step 5) ──────────────────────────────
+
+
+def correct_skin_tone(
+    image: Image.Image,
+    original_person: Image.Image,
+    person_img: Image.Image,
+    mask_img: Image.Image,
+) -> Image.Image:
+    """
+    Check and correct skin color to prevent garment swap from shifting skin tone.
+
+    Detects the face region in the original person image and compares mean
+    skin color to the result. Applies color correction if significant shift.
+    """
+    img_np = np.array(image.convert("RGB")).astype(np.float32)
+    orig_np = np.array(original_person.convert("RGB")).astype(np.float32)
+    mask_np = np.array(mask_img.convert("L")).astype(np.float32) / 255.0
+
+    # Detect face region in original image for skin color sampling
+    orig_cv = np.array(original_person.convert("RGB"))[:, :, ::-1]
+    gray = cv2.cvtColor(orig_cv, cv2.COLOR_BGR2GRAY)
+    face_cascade = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    )
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
+
+    h, w = mask_np.shape
+    face_skin_mask = np.zeros((h, w), dtype=np.float32)
+
+    if len(faces) > 0:
+        # Use the largest face bbox for skin measurement
+        fx, fy, fw, fh = max(faces, key=lambda r: r[2] * r[3])
+        # Use center 60% of face bbox (avoid hair/neck edges)
+        margin_x = int(fw * 0.20)
+        margin_y = int(fh * 0.15)
+        sx1 = max(0, fx + margin_x)
+        sy1 = max(0, fy + margin_y)
+        sx2 = min(w, fx + fw - margin_x)
+        sy2 = min(h, fy + fh - margin_y)
+        if sx2 > sx1 and sy2 > sy1:
+            face_skin_mask[sy1:sy2, sx1:sx2] = 1.0
+            logger.info("skin_tone_face_bbox=[%d,%d,%d,%d]", sx1, sy1, sx2, sy2)
+    else:
+        # Fallback: use upper-central region (crude approximation)
+        face_skin_mask[int(h * 0.08):int(h * 0.35), int(w * 0.25):int(w * 0.75)] = 1.0
+        logger.info("skin_tone_fallback=upper_central (no face detected)")
+
+    # Exclude garment mask area
+    skin_mask = face_skin_mask * (1.0 - (mask_np > 0.5).astype(np.float32))
+
+    if skin_mask.sum() < 50:
+        logger.info("skin_tone_skipped skin_region_too_small")
+        return image
+
+    # Mean color in skin region
+    skin_mask_3ch = np.stack([skin_mask] * 3, axis=-1)
+    skin_pixel_count = max(skin_mask.sum(), 1.0)
+    orig_skin = (orig_np * skin_mask_3ch).sum(axis=(0, 1)) / skin_pixel_count
+    img_skin = (img_np * skin_mask_3ch).sum(axis=(0, 1)) / skin_pixel_count
+
+    # Per-channel gain to match original
+    gain = np.where(img_skin > 1.0, orig_skin / (img_skin + 1e-6), 1.0)
+    gain = np.clip(gain, 0.85, 1.15)  # Limit correction to +/-15%
+
+    max_diff = float(np.max(np.abs(gain - 1.0)))
+    if max_diff > 0.03:  # >3% per-channel difference triggers correction
+        corrected = img_np * gain.reshape(1, 1, 3)
+        corrected = np.clip(corrected, 0, 255).astype(np.uint8)
+        logger.info(
+            "skin_tone_corrected max_diff=%.4f gain_r=%.3f gain_g=%.3f gain_b=%.3f",
+            max_diff, gain[0], gain[1], gain[2],
+        )
+        return Image.fromarray(corrected)
+
+    logger.info("skin_tone_ok max_diff=%.4f (no correction needed)", max_diff)
+    return image
+
+
 def composite_original_face(
     original: Image.Image,
     result: Image.Image,
-    expand_ratio: float = 0.35,
+    expand_ratio: float = 0.25,
 ) -> Image.Image:
     """Paste the original face region onto the diffusion result."""
     if original.size != result.size:
@@ -483,13 +749,6 @@ def load_models():
             )
             break
 
-    # Enable xformers / memory-efficient attention
-    try:
-        pipeline.unet.enable_xformers_memory_efficient_attention()
-        logger.info("xformers attention enabled on UNet")
-    except Exception as exc:
-        logger.warning("xformers enable failed: %s", exc)
-
     # Gate VAE slicing: enable on GPUs with < 14 GB VRAM, disable otherwise
     try:
         vram_total = torch.cuda.get_device_properties(0).total_memory
@@ -535,14 +794,18 @@ def load_models():
             "cross-attention modules — re-applying (diffusers compat fix)"
         )
         _init_adapter(pipeline.unet, cross_attn_cls=_SkipAttnProcessor)
-        # NOTE: intentionally NOT re-enabling xformers here —
-        # enable_xformers_memory_efficient_attention() would replace ALL
-        # attention processors (including our SkipAttnProcessor on attn2)
-        # with xformers-compatible versions, undoing the fix.
-        # AttnProcessor2_0 (set by init_adapter on self-attention) uses
-        # PyTorch SDPA which is already memory-efficient.
+        # NOTE: Do NOT call enable_xformers_memory_efficient_attention() here.
+        # It replaces ALL attention processors (including attn2 SkipAttnProcessor)
+        # with xformers-compatible versions, which would undo our fix.
+        # init_adapter already sets AttnProcessor2_0 on self-attention (attn1),
+        # which uses PyTorch SDPA and is already memory-efficient.
+        logger.info("skip_attn_reapply: relying on SDPA for self-attention efficiency")
     else:
         logger.info("skip_attn_ok SkipAttnProcessor present on all cross-attention modules")
+        # Do NOT call enable_xformers_memory_efficient_attention() as it would
+        # overwrite SkipAttnProcessor on attn2. AttnProcessor2_0 via SDPA is
+        # already memory-efficient for self-attention.
+        logger.info("skip_attn_ok: relying on SDPA for self-attention efficiency")
 
     # Build AutoMasker
     pipeline.automasker = AutoMasker(
@@ -650,78 +913,262 @@ def run_inference(job_input: dict[str, Any], job_id: str) -> dict[str, Any]:
 
     cloth_type = CLOTH_TYPE_MAP.get(cloth_type_raw, "upper")
     steps = int(job_input.get("steps", 30))
-    guidance_scale = float(job_input.get("guidance_scale", 2.5))
+    guidance_scale = float(job_input.get("guidance_scale", 7.5))
     seed_in = job_input.get("seed", random.randint(0, 2**31 - 1))
+    prompt = job_input.get("prompt", DEFAULT_POSITIVE_PROMPT)
+    negative_prompt = job_input.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
 
     logger.info(
-        "inference_start cloth_type=%s steps=%s guidance=%.1f",
-        cloth_type, steps, guidance_scale,
+        "inference_start cloth_type=%s steps=%s guidance=%.1f prompt_provided=%s fashn_available=%s",
+        cloth_type, steps, guidance_scale, bool(job_input.get("prompt")), _FASHN_AVAILABLE,
     )
 
-    # Download images
+    # ── Download person and mask (needed for post-processing regardless) ─
     download_start = time.perf_counter()
     person_img = download_image(person_url)
-    garment_img = download_image(garment_url)
-
-    # Defensive geometry check — preprocessing should have produced 768x1024,
-    # but we guard against edge cases (direct API calls, debugging, etc.)
-    person_img = _ensure_canonical_size(person_img)
-    garment_img = _ensure_canonical_size(garment_img)
-
-    # Mask source: preprocessing PRIMARY, AutoMasker FALLBACK
     mask_source: str
     if mask_url:
         mask_img = download_image(mask_url)
         mask_source = "preprocessing"
-        logger.info("mask_source=preprocessing using preprocessing mask")
     else:
         mask_img = None
         mask_source = "automasker_fallback"
-        logger.info("mask_source=automasker_fallback no mask from preprocessing")
+    person_img = _ensure_canonical_size(person_img)
 
-    mask = prepare_mask(mask_img, cloth_type, person_img)
+    # ── Fashn AI Primary Inference Path ─────────────────────────────────
+    inference_engine = "catvton"
+    result_raw = None
     download_ms = (time.perf_counter() - download_start) * 1000
 
-    # Inference
-    inference_start = time.perf_counter()
-    generator = torch.Generator(device="cuda").manual_seed(int(seed_in))
+    if _FASHN_AVAILABLE:
+        logger.info("inference_engine=fashn_ai primary_path")
+        try:
+            fashn_result = fashn_client.run_tryon(
+                person_image_url=person_url,
+                garment_image_url=garment_url,
+                job_id=job_id,
+                timeout=120,
+            )
+            if fashn_result.get("status") == "success":
+                inference_engine = "fashn_ai"
+                result_path = fashn_result["result_url"]
+                result_raw = download_image(result_path)
+                result_raw = _ensure_canonical_size(result_raw)
+                logger.info("fashn_success job_id=%s", job_id)
+            else:
+                logger.warning(
+                    "fashn_fallback fashn_failed reason=%s",
+                    fashn_result.get("error", "unknown"),
+                )
+        except Exception as exc:
+            logger.warning(
+                "fashn_fallback exception=%s falling_back_to_catvton", exc,
+            )
+    else:
+        logger.info("inference_engine=catvton fashn_not_configured")
 
-    logger.info(
-    "pipeline_debug cross_attention_dim=%s in_channels=%s",
-    pipeline.unet.config.cross_attention_dim,
-    pipeline.unet.config.in_channels,
+    # ── CatVTON Path (fallback) ────────────────────────────────────────
+    if inference_engine == "catvton":
+        logger.info("inference_engine=catvton inference_path")
+        garment_img = download_image(garment_url)
+        garment_img = _ensure_canonical_size(garment_img)
+
+        # Prepare mask for CatVTON
+        mask = prepare_mask(mask_img, cloth_type, person_img)
+
+        if DEBUG:
+            m = save_debug(f"{job_id}_mask_final", mask)
+            if m:
+                debug_files["mask_final"] = m
+
+            expanded = np.array(mask.convert("L")).astype(np.uint8)
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+            expanded = cv2.dilate(expanded, kernel, iterations=1)
+            expanded_pil = Image.fromarray(expanded, mode="L")
+            em = save_debug(f"{job_id}_mask_expanded", expanded_pil)
+            if em:
+                debug_files["mask_expanded"] = em
+
+        # CatVTON Inference
+        inference_start = time.perf_counter()
+        generator = torch.Generator(device="cuda").manual_seed(int(seed_in))
+
+        cloth_type_allowed = {"upper", "lower", "overall"}
+        if cloth_type not in cloth_type_allowed:
+            logger.warning("invalid_cloth_type=%s defaulting to upper", cloth_type)
+            cloth_type = "upper"
+
+        guidance_scale = float(max(1.0, min(10.0, guidance_scale)))
+
+        mask_np_arr = np.array(mask.convert("L"))
+        mask_coverage = float(mask_np_arr.mean() / 255.0)
+        logger.info("mask_diagnostics mask_coverage=%.3f", mask_coverage)
+        if mask_coverage <= 0.0:
+            raise RuntimeError("mask_is_empty mask_coverage=0.0; garment not applied safely")
+
+        import gc
+        oom_retry_triggered = False
+        negative_prompt_injected = False
+        negative_prompt_supported = False
+
+        try:
+            import inspect
+            sig = inspect.signature(pipeline.__call__)
+            negative_prompt_supported = "negative_prompt" in sig.parameters
+        except Exception:
+            negative_prompt_supported = False
+
+        base_kwargs: dict[str, Any] = {
+            "image": person_img,
+            "condition_image": garment_img,
+            "mask": mask,
+            "num_inference_steps": steps,
+            "guidance_scale": guidance_scale,
+            "generator": generator,
+        }
+
+        try:
+            sig = inspect.signature(pipeline.__call__)
+            if "prompt" in sig.parameters:
+                base_kwargs["prompt"] = prompt
+        except Exception:
+            pass
+
+        if negative_prompt_supported:
+            base_kwargs["negative_prompt"] = negative_prompt
+            negative_prompt_injected = True
+
+        try:
+            generation_steps = steps
+            with torch.inference_mode():
+                result_raw = pipeline(**base_kwargs)[0]
+        except torch.cuda.OutOfMemoryError:
+            oom_retry_triggered = True
+            torch.cuda.empty_cache()
+            gc.collect()
+            oom_retry_steps = max(15, steps - 10)
+            logger.warning("oom_retry: %s -> %s", steps, oom_retry_steps)
+            base_kwargs["num_inference_steps"] = oom_retry_steps
+            with torch.inference_mode():
+                result_raw = pipeline(**base_kwargs)[0]
+
+        torch.cuda.synchronize()
+        inference_ms = (time.perf_counter() - inference_start) * 1000
+
+        if DEBUG:
+            raw_path = save_debug(f"{job_id}_raw_output", result_raw)
+            if raw_path:
+                debug_files["raw_output"] = raw_path
+
+        # Hard composite for CatVTON (diffusion can bleed outside mask)
+        result = hard_composite(
+            original_person=person_img,
+            model_output=result_raw,
+            mask_img=mask,
+            edge_feather_px=8,
+        )
+    else:
+        # Fashn AI: no hard composite needed (different model, no mask bleed)
+        result = result_raw
+        inference_ms = download_ms
+        # Ensure mask is defined for shared post-processing
+        if mask_img is not None:
+            mask = mask_img.convert("L")
+            if mask.size != TARGET_SIZE:
+                mask = mask.resize(TARGET_SIZE, Image.Resampling.LANCZOS)
+        else:
+            # Create a full-frame mask as fallback (post-processing will degrade gracefully)
+            mask = Image.new("L", TARGET_SIZE, 128)
+        mask_source = "fashn_ai"
+    
+    debug_files = {}
+    person_original_for_composite = person_img
+    download_ms = download_ms or (time.perf_counter() - download_start) * 1000
+
+    if DEBUG:
+        hc_path = save_debug(f"{job_id}_hard_composite_result", result)
+        if hc_path:
+            debug_files["hard_composite_result"] = hc_path
+
+    # Mask overlap diagnostics (face/neck) for logging/trace
+    face_cascade = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
     )
-
-    try:
-        text_hidden = pipeline.text_encoder.config.hidden_size
-    except Exception:
-        text_hidden = "missing"
-
-    logger.info("pipeline_debug text_hidden_size=%s", text_hidden)
-    logger.info(
-        "pipeline_debug person_size=%s garment_size=%s mask_size=%s",
-        person_img.size,
-        garment_img.size,
-        mask.size,
+    orig_cv = np.array(person_img.convert("RGB"))[:, :, ::-1]
+    gray = cv2.cvtColor(orig_cv, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(
+        gray,
+        scaleFactor=1.1,
+        minNeighbors=5,
+        minSize=(80, 80),
     )
+    mask_l = np.array(mask.convert("L")).astype(np.uint8)
+    face_overlap_percent = 0.0
+    neck_overlap_percent = 0.0
 
-    with torch.inference_mode():
-        result = pipeline(
-            image=person_img,
-            condition_image=garment_img,
-            mask=mask,
-            num_inference_steps=steps,
-            guidance_scale=guidance_scale,
-            generator=generator,
-        )[0]
+    if len(faces) > 0:
+        x, y, w, h = max(faces, key=lambda face: face[2] * face[3])
+        # face region (slightly padded)
+        pad_x = int(w * 0.10)
+        pad_y = int(h * 0.10)
+        fx1, fy1 = max(0, x - pad_x), max(0, y - pad_y)
+        fx2, fy2 = min(mask_l.shape[1], x + w + pad_x), min(mask_l.shape[0], y + h + pad_y)
+        face_area = max(1, (fy2 - fy1) * (fx2 - fx1))
+        face_overlap_percent = float((mask_l[fy1:fy2, fx1:fx2] > 0).sum() / face_area)
 
-    torch.cuda.synchronize()
-    inference_ms = (time.perf_counter() - inference_start) * 1000
+        # neck region (below face bbox)
+        nx1, ny1 = fx1, fy2
+        nx2, ny2 = fx2, min(mask_l.shape[0], fy2 + int(h * 0.35))
+        neck_area = max(1, (ny2 - ny1) * (nx2 - nx1))
+        neck_overlap_percent = float((mask_l[ny1:ny2, nx1:nx2] > 0).sum() / neck_area)
 
-    result = composite_original_face(person_img, result, expand_ratio=0.12)
+        if (face_overlap_percent > 0.05) or (neck_overlap_percent > 0.05):
+            logger.warning(
+                "mask_overlap warning face_overlap=%.3f neck_overlap=%.3f bbox_face=%s",
+                face_overlap_percent, neck_overlap_percent, (fx1, fy1, fx2, fy2)
+            )
 
-    # Conditional face restoration
+    trace = {
+        "mask_coverage_percent": round(mask_coverage * 100.0, 3),
+        "mask_overlap": {
+            "face_overlap_percent": round(face_overlap_percent * 100.0, 3),
+            "neck_overlap_percent": round(neck_overlap_percent * 100.0, 3),
+        },
+        "generation_steps": int(generation_steps),
+        "oom_retry_triggered": bool(oom_retry_triggered),
+        "oom_retry_steps": int(oom_retry_steps) if oom_retry_steps is not None else None,
+        "final_resolution": [person_img.size[0], person_img.size[1]],
+        "pipeline_runtime_ms": round(inference_ms, 2),
+        "pipeline_kwargs_snapshot": pipeline_kwargs_snapshot,
+    }
+
+    # ── Step 1: Face identity preservation (original face paste) ──────
+    result = composite_original_face(person_img, result, expand_ratio=0.25)
+
+    # ── Step 2: Conditional face restoration (GFPGAN) ──────────────────
     result = restore_face(result, cloth_type)
+
+    if DEBUG:
+        face_path = save_debug(f"{job_id}_face_composite_result", result)
+        if face_path:
+            debug_files["face_composite_result"] = face_path
+
+    # ── Step 3: Seamless blending at garment boundary (edge only) ──────
+    result = seamless_garment_blend(result, person_original_for_composite, mask)
+    if DEBUG:
+        sb = save_debug(f"{job_id}_seamless_blend_result", result)
+        if sb:
+            debug_files["seamless_blend_result"] = sb
+
+    # ── Step 4: Garment region sharpening (unsharp mask, after blend) ──
+    result = sharpen_garment_region(result, mask, radius=1.0, percent=120, threshold=3)
+    if DEBUG:
+        sp = save_debug(f"{job_id}_sharpened_result", result)
+        if sp:
+            debug_files["sharpened_result"] = sp
+
+    # ── Step 5: Color consistency check (skin tone preservation) ───────
+    result = correct_skin_tone(result, person_original_for_composite, person_img, mask)
 
     # Upload to Cloudinary (with retry built into _upload_to_cloudinary)
     upload_start = time.perf_counter()
@@ -736,7 +1183,7 @@ def run_inference(job_input: dict[str, Any], job_id: str) -> dict[str, Any]:
         total_ms, download_ms, inference_ms, upload_ms, mask_source,
     )
 
-    return {
+    payload: dict[str, Any] = {
         "status": "success",
         "result_url": result_url,
         "cloth_type_used": cloth_type,
@@ -748,6 +1195,12 @@ def run_inference(job_input: dict[str, Any], job_id: str) -> dict[str, Any]:
         "download_ms": round(download_ms, 2),
         "total_ms": round(total_ms, 2),
     }
+
+    if DEBUG:
+        payload["debug_files"] = debug_files
+        payload["trace"] = trace
+
+    return payload
 
 
 # ── RunPod Handler (called per job) ───────────────────────────────────────

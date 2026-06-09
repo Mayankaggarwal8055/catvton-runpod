@@ -21,6 +21,10 @@ WORKDIR /workspace/CatVTON
 COPY patches/patch_cloth_masker.py /tmp/patch_cloth_masker.py
 RUN python /tmp/patch_cloth_masker.py
 
+# Patch pipeline for guidance scale verification, face exclusion, and garment sharpening
+COPY patches/patch_pipeline.py /tmp/patch_pipeline.py
+RUN python /tmp/patch_pipeline.py
+
 # torchvision
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-deps \
